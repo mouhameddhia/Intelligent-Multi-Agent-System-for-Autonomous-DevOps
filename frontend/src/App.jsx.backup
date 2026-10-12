@@ -1,0 +1,472 @@
+import { useState } from 'react'
+import './App.css'
+
+const initialIntegrations = [
+  {
+    id: 'jenkins',
+    name: 'Jenkins',
+    description: 'Monitor CI/CD jobs, builds, stages and console logs.',
+    category: 'CI/CD',
+    icon: 'J',
+    color: 'jenkins',
+    fields: [
+      { name: 'url', label: 'Jenkins URL', placeholder: 'http://localhost:8080' },
+      { name: 'username', label: 'Username', placeholder: 'Your Jenkins username' },
+      { name: 'token', label: 'API token', placeholder: 'Enter API token', secret: true },
+    ],
+  },
+  {
+    id: 'github',
+    name: 'GitHub',
+    description: 'Access repositories, commits and workflow information.',
+    category: 'Source control',
+    icon: '⌘',
+    color: 'github',
+    fields: [
+      { name: 'url', label: 'Repository URL', placeholder: 'https://github.com/owner/repository' },
+      { name: 'token', label: 'Personal access token', placeholder: 'Enter access token', secret: true },
+    ],
+  },
+  {
+    id: 'prometheus',
+    name: 'Prometheus',
+    description: 'Collect metrics and identify abnormal system behavior.',
+    category: 'Monitoring',
+    icon: 'P',
+    color: 'prometheus',
+    fields: [
+      { name: 'url', label: 'Prometheus URL', placeholder: 'http://localhost:9090' },
+    ],
+  },
+]
+
+const navigation = [
+  { id: 'dashboard', icon: '▦', label: 'Dashboard' },
+  { id: 'pipelines', icon: '⑂', label: 'Pipelines' },
+  { id: 'incidents', icon: '◈', label: 'Incidents' },
+]
+
+function App() {
+  const [activePage, setActivePage] = useState('dashboard')
+  const [integrations, setIntegrations] = useState(initialIntegrations)
+  const [selectedIntegration, setSelectedIntegration] = useState(null)
+  const [formValues, setFormValues] = useState({})
+  const [savedConfigurations, setSavedConfigurations] = useState({})
+
+  const selectedTool = integrations.find(
+    (integration) => integration.id === selectedIntegration,
+  )
+
+  function openConfiguration(integration) {
+    setSelectedIntegration(integration.id)
+    setFormValues(savedConfigurations[integration.id] || {})
+  }
+
+  function saveConfiguration(event) {
+    event.preventDefault()
+
+    setSavedConfigurations((previous) => ({
+      ...previous,
+      [selectedIntegration]: formValues,
+    }))
+
+    setIntegrations((previous) =>
+      previous.map((integration) =>
+        integration.id === selectedIntegration
+          ? { ...integration, configured: true }
+          : integration,
+      ),
+    )
+
+    setSelectedIntegration(null)
+  }
+
+  const configuredCount = integrations.filter(
+    (integration) => integration.configured,
+  ).length
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <a className="brand" href="#" onClick={() => setActivePage('dashboard')}>
+          <span className="brand-mark">P</span>
+          <span>
+            <strong>pipeguard</strong>
+            <small>DevOps intelligence</small>
+          </span>
+        </a>
+
+        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-switcher">
+          <span className="workspace-avatar">P</span>
+          <span className="workspace-name">
+            <strong>Personal workspace</strong>
+            <small>Free workspace</small>
+          </span>
+          <span className="chevron">⌄</span>
+        </div>
+
+        <div className="nav-label">PLATFORM</div>
+        <nav className="navigation">
+          {navigation.map((item) => (
+            <button
+              key={item.id}
+              className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+              onClick={() => setActivePage(item.id)}
+            >
+              <span className="nav-icon">{item.icon}</span>
+              {item.label}
+              {item.id === 'incidents' && <span className="nav-count">0</span>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="nav-label settings-label">CONFIGURATION</div>
+        <button
+          className={`nav-item ${activePage === 'settings' ? 'active' : ''}`}
+          onClick={() => setActivePage('settings')}
+        >
+          <span className="nav-icon">⚙</span>
+          Settings
+        </button>
+
+        <div className="sidebar-bottom">
+          <div className="help-card">
+            <span className="help-icon">✳</span>
+            <strong>Build with confidence</strong>
+            <p>Connect your tools to start monitoring your pipelines.</p>
+            <button onClick={() => setActivePage('settings')}>
+              Configure tools <span>→</span>
+            </button>
+          </div>
+          <div className="user-profile">
+            <div className="user-avatar">AO</div>
+            <div className="user-details">
+              <strong>Workspace owner</strong>
+              <small>Administrator</small>
+            </div>
+            <span className="profile-menu">•••</span>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-content">
+        <header className="topbar">
+          <div className="breadcrumb">
+            <span>Workspace</span>
+            <span className="breadcrumb-divider">/</span>
+            <strong>
+              {activePage === 'dashboard'
+                ? 'Dashboard'
+                : activePage === 'settings'
+                  ? 'Settings'
+                  : activePage === 'pipelines'
+                    ? 'Pipelines'
+                    : 'Incidents'}
+            </strong>
+          </div>
+          <div className="topbar-right">
+            <span className="environment-badge">
+              <span className="status-dot gray" />
+              Demo workspace
+            </span>
+            <button
+              className="icon-button"
+              aria-label="Notifications"
+              title="Notifications"
+            >
+              ♧
+            </button>
+            <div className="topbar-avatar">AO</div>
+          </div>
+        </header>
+
+        <div className="page-content">
+          {activePage === 'dashboard' && (
+            <>
+              <section className="page-heading">
+                <div>
+                  <div className="eyebrow">OVERVIEW</div>
+                  <h1>Good evening<span className="heading-period">.</span></h1>
+                  <p className="page-subtitle">
+                    Your pipeline operations, all in one place.
+                  </p>
+                </div>
+                <button
+                  className="primary-button"
+                  onClick={() => setActivePage('settings')}
+                >
+                  <span>＋</span> Connect a tool
+                </button>
+              </section>
+
+              <section className="welcome-banner">
+                <div className="banner-copy">
+                  <div className="banner-kicker">
+                    <span className="banner-spark">✳</span> PIPEGUARD INTELLIGENCE
+                  </div>
+                  <h2>Your pipelines.<br />Under control.</h2>
+                  <p>
+                    Connect your DevOps stack to monitor builds, investigate
+                    failures and work toward safer, faster recovery.
+                  </p>
+                  <button
+                    className="banner-button"
+                    onClick={() => setActivePage('settings')}
+                  >
+                    Set up your workspace <span>→</span>
+                  </button>
+                </div>
+                <div className="banner-visual" aria-hidden="true">
+                  <div className="orbit orbit-one" />
+                  <div className="orbit orbit-two" />
+                  <div className="orbit orbit-three" />
+                  <div className="visual-core">
+                    <span>✳</span>
+                  </div>
+                  <div className="visual-node node-one">✓</div>
+                  <div className="visual-node node-two">⌘</div>
+                  <div className="visual-node node-three">↗</div>
+                  <div className="visual-line line-one" />
+                  <div className="visual-line line-two" />
+                </div>
+              </section>
+
+              <section className="metrics-grid">
+                <MetricCard
+                  label="Connected tools"
+                  value={`${configuredCount} / ${integrations.length}`}
+                  note="Configurations saved locally"
+                  icon="⌘"
+                  tone="purple"
+                />
+                <MetricCard
+                  label="Active pipelines"
+                  value="—"
+                  note="Connect a CI/CD provider"
+                  icon="⑂"
+                  tone="blue"
+                />
+                <MetricCard
+                  label="Open incidents"
+                  value="—"
+                  note="Awaiting live data"
+                  icon="◈"
+                  tone="orange"
+                />
+                <MetricCard
+                  label="Agent status"
+                  value="Standby"
+                  note="Monitoring not started"
+                  icon="✳"
+                  tone="green"
+                />
+              </section>
+
+              <section className="section-heading">
+                <div>
+                  <h2>Your integrations</h2>
+                  <p>Connect the tools that power your delivery workflow.</p>
+                </div>
+                <button
+                  className="text-button"
+                  onClick={() => setActivePage('settings')}
+                >
+                  Manage integrations <span>→</span>
+                </button>
+              </section>
+
+              <IntegrationGrid
+                integrations={integrations}
+                onConfigure={openConfiguration}
+              />
+
+              <section className="activity-section">
+                <div className="section-heading activity-heading">
+                  <div>
+                    <h2>Recent activity</h2>
+                    <p>Events and updates from your workspace.</p>
+                  </div>
+                  <span className="live-label">
+                    <span className="status-dot gray" /> Waiting for data
+                  </span>
+                </div>
+                <div className="empty-state">
+                  <div className="empty-state-icon">⌁</div>
+                  <strong>No activity yet</strong>
+                  <p>
+                    Once a provider is connected, pipeline events and
+                    incidents will appear here.
+                  </p>
+                </div>
+              </section>
+            </>
+          )}
+
+          {activePage === 'settings' && (
+            <>
+              <section className="page-heading">
+                <div>
+                  <div className="eyebrow">WORKSPACE</div>
+                  <h1>Integrations<span className="heading-period">.</span></h1>
+                  <p className="page-subtitle">
+                    Configure the providers PipeGuard will connect to.
+                  </p>
+                </div>
+              </section>
+              <IntegrationGrid
+                integrations={integrations}
+                onConfigure={openConfiguration}
+              />
+              <div className="notice-box">
+                <span>ⓘ</span>
+                <p>
+                  <strong>Configuration only — not connected.</strong> These
+                  settings currently stay in this browser session. The next
+                  step is to send credentials securely to the PipeGuard
+                  backend and verify each provider using its API.
+                </p>
+              </div>
+            </>
+          )}
+
+          {(activePage === 'pipelines' || activePage === 'incidents') && (
+            <section className="placeholder-page">
+              <div className="placeholder-icon">
+                {activePage === 'pipelines' ? '⑂' : '◈'}
+              </div>
+              <h1>{activePage === 'pipelines' ? 'Pipelines' : 'Incidents'}</h1>
+              <p>
+                {activePage === 'pipelines'
+                  ? 'Live pipeline runs will appear here after connecting a CI/CD provider.'
+                  : 'Detected failures and investigation workflows will appear here.'}
+              </p>
+              <button
+                className="primary-button"
+                onClick={() => setActivePage('settings')}
+              >
+                Configure integrations <span>→</span>
+              </button>
+            </section>
+          )}
+        </div>
+      </main>
+
+      {selectedTool && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSelectedIntegration(null)
+            }
+          }}
+        >
+          <section
+            className="configuration-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+          >
+            <div className="modal-header">
+              <div className={`integration-icon ${selectedTool.color}`}>
+                {selectedTool.icon}
+              </div>
+              <button
+                className="modal-close"
+                onClick={() => setSelectedIntegration(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-eyebrow">PROVIDER CONFIGURATION</div>
+            <h2 id="modal-title">Configure {selectedTool.name}</h2>
+            <p className="modal-description">{selectedTool.description}</p>
+
+            <form onSubmit={saveConfiguration}>
+              {selectedTool.fields.map((field) => (
+                <label className="form-field" key={field.name}>
+                  <span>{field.label}</span>
+                  <input
+                    type={field.secret ? 'password' : 'text'}
+                    placeholder={field.placeholder}
+                    value={formValues[field.name] || ''}
+                    onChange={(event) =>
+                      setFormValues((previous) => ({
+                        ...previous,
+                        [field.name]: event.target.value,
+                      }))
+                    }
+                    required
+                  />
+                </label>
+              ))}
+              <div className="form-notice">
+                <span>ⓘ</span>
+                Saving these fields does not test the connection yet.
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setSelectedIntegration(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="primary-button">
+                  Save configuration
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MetricCard({ label, value, note, icon, tone }) {
+  return (
+    <article className="metric-card">
+      <div className={`metric-icon ${tone}`}>{icon}</div>
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value}</div>
+      <div className="metric-note">{note}</div>
+    </article>
+  )
+}
+
+function IntegrationGrid({ integrations, onConfigure }) {
+  return (
+    <div className="integration-grid">
+      {integrations.map((integration) => (
+        <article className="integration-card" key={integration.id}>
+          <div className="integration-card-top">
+            <div className={`integration-icon ${integration.color}`}>
+              {integration.icon}
+            </div>
+            <span className="connection-status">
+              <span className={`status-dot ${integration.configured ? 'amber' : 'gray'}`} />
+              {integration.configured ? 'Configured' : 'Not connected'}
+            </span>
+          </div>
+          <div className="integration-name">{integration.name}</div>
+          <div className="integration-category">{integration.category}</div>
+          <p className="integration-description">{integration.description}</p>
+          <div className="integration-card-footer">
+            <span className="provider-type">Provider</span>
+            <button
+              className="configure-button"
+              onClick={() => onConfigure(integration)}
+            >
+              {integration.configured ? 'Edit configuration' : 'Configure'}
+              <span>→</span>
+            </button>
+          </div>
+        </article>
+      ))}
+    </div>
+  )
+}
+
+export default App
