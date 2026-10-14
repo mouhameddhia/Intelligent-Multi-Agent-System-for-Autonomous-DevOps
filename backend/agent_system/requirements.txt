@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+langchain
+langchain-groq
+langchain-core
+langgraph
+pydantic-settings
+httpx
+
+pymongo

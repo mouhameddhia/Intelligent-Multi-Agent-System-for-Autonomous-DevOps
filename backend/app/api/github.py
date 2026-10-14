@@ -45,6 +45,26 @@ def get_github_repositories(request: GitHubTokenRequest):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+class GitHubCommitRequest(GitHubCommitsRequest):
+    sha: str = Field(min_length=7, max_length=64)
+
+
+@router.post("/commit")
+def get_github_commit(request: GitHubCommitRequest):
+    token = request.token.get_secret_value()
+    try:
+        commit = GitHubConnector(token).get_commit(
+            owner=request.owner,
+            repository=request.repository,
+            sha=request.sha,
+        )
+        return {"provider": "github", "commit": commit}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GitHubConnectionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/commits")
 def get_github_commits(request: GitHubCommitsRequest):
     token = request.token.get_secret_value()

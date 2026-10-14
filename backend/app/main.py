@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jenkins import router as jenkins_router
+from app.api.prometheus import router as prometheus_router
+from app.api.investigation import router as investigation_router
 
 app = FastAPI(
     title="PipeGuard API",
@@ -40,3 +42,5 @@ def health():
     }
 from app.api.github import router as github_router
 app.include_router(github_router)
+app.include_router(prometheus_router)
+app.include_router(investigation_router)

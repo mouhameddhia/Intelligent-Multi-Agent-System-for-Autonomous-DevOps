@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-
+me.txt
 # Python
 .venv/
 venv/
@@ -19,3 +19,17 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+me.txt
+*.bak
+*.before-*
+*.backup_*
+*.pre_repair_*
+*.tar.gz
+.env
+me.txt
+.env
+*.bak
+*.before-*
+*.backup_*
+*.pre_repair_*
+*.tar.gz

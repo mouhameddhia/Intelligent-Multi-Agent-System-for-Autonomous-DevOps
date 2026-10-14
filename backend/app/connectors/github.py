@@ -104,6 +104,45 @@ class GitHubConnector:
             if isinstance(repo, dict)
         ]
 
+    def get_commit(self, owner: str, repository: str, sha: str) -> dict:
+        import re
+
+        owner = owner.strip()
+        repository = repository.strip()
+        sha = sha.strip()
+
+        if not owner or not repository:
+            raise ValueError("Repository owner and name are required.")
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
+            raise ValueError("A valid Git commit SHA is required.")
+
+        data = self._get(f"/repos/{owner}/{repository}/commits/{sha}")
+        if not isinstance(data, dict):
+            raise GitHubConnectionError("GitHub returned an invalid commit response.")
+
+        commit = data.get("commit") or {}
+        author = commit.get("author") or {}
+        files = data.get("files") or []
+
+        return {
+            "sha": data.get("sha"),
+            "message": commit.get("message"),
+            "author": author.get("name"),
+            "date": author.get("date"),
+            "html_url": data.get("html_url"),
+            "files": [
+                {
+                    "filename": item.get("filename"),
+                    "status": item.get("status"),
+                    "additions": item.get("additions", 0),
+                    "deletions": item.get("deletions", 0),
+                    "changes": item.get("changes", 0),
+                }
+                for item in files
+                if isinstance(item, dict)
+            ],
+        }
+
     def get_commits(
         self,
         owner: str,

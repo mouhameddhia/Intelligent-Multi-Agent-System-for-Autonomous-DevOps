@@ -55,3 +55,55 @@ def list_jenkins_jobs(credentials: JenkinsCredentials):
         }
     except JenkinsConnectionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class JenkinsBuildHistoryRequest(JenkinsCredentials):
+    job_name: str = Field(min_length=1, max_length=256)
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+class JenkinsBuildEvidenceRequest(JenkinsCredentials):
+    job_name: str = Field(min_length=1, max_length=256)
+    build_number: int = Field(ge=1)
+
+
+@router.post("/builds")
+def list_jenkins_builds(request: JenkinsBuildHistoryRequest):
+    connector = create_connector(request)
+
+    try:
+        builds = connector.get_builds(
+            job_name=request.job_name,
+            limit=request.limit,
+        )
+        return {
+            "provider": "jenkins",
+            "job_name": request.job_name,
+            "count": len(builds),
+            "builds": builds,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except JenkinsConnectionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/build-evidence")
+def retrieve_jenkins_build_evidence(
+    request: JenkinsBuildEvidenceRequest,
+):
+    connector = create_connector(request)
+
+    try:
+        evidence = connector.get_build_evidence(
+            job_name=request.job_name,
+            build_number=request.build_number,
+        )
+        return {
+            "provider": "jenkins",
+            **evidence,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except JenkinsConnectionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

@@ -169,6 +169,36 @@ class PrometheusConnector:
 
         return results
 
+    def query_range(
+        self,
+        expression: str,
+        start: float,
+        end: float,
+        step: str = "30s",
+    ) -> list[dict]:
+        if not expression.strip():
+            raise ValueError("Enter a PromQL query.")
+        if start >= end:
+            raise ValueError("The metrics start time must be before the end time.")
+        if not step.strip():
+            raise ValueError("A Prometheus query step is required.")
+
+        data = self._get_api_data(
+            "/api/v1/query_range",
+            {
+                "query": expression.strip(),
+                "start": start,
+                "end": end,
+                "step": step.strip(),
+            },
+        )
+        results = data.get("result", [])
+        if not isinstance(results, list):
+            raise PrometheusConnectionError(
+                "Prometheus returned an invalid range-query result."
+            )
+        return results
+
     def query(self, expression: str) -> list[dict]:
         if not expression.strip():
             raise ValueError("Enter a PromQL query.")
