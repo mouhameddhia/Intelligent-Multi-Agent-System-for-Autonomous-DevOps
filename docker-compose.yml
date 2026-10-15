@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    image: autoops-agents:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Defaults for an offline demo. Put API keys in .env to enable the real LLM chain.
+      MOCK_LLM: ${MOCK_LLM:-false}
+      STEP_DELAY_S: ${STEP_DELAY_S:-1.0}
+    volumes:
+      - agent-data:/app/data/state
+    restart: unless-stopped
+volumes:
+  agent-data:

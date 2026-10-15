@@ -1,0 +1,26 @@
+id: cart-oom-killed
+order: 2
+title: cartservice OOMKilled after resource right-sizing (staging)
+summary: >
+  A cost-saving commit lowered the cartservice memory limit from 512Mi to 128Mi in staging.
+  The .NET cart cache exceeds the limit and pods are OOMKilled repeatedly.
+service: cartservice
+namespace: boutique-staging
+environment: staging
+repository: acme/online-boutique
+start: "2026-10-12T09:00:00Z"
+watch:
+  namespaces: [boutique-staging]
+  pipelines: []
+  repositories: [acme/online-boutique]
+ground_truth:
+  category: memory_limit
+  component: cartservice
+  root_cause: Memory limit lowered to 128Mi, below the working set of cartservice (~180MiB).
+  fix: {type: config_change, target: cartservice}
+accepted_fixes:
+  - {type: config_change, target: cartservice}
+  - {type: rollback, target: cartservice}
+expected:
+  policy_verdict: auto_logged
+  blocked: false

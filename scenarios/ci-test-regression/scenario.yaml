@@ -1,0 +1,25 @@
+id: ci-test-regression
+order: 4
+title: GitHub Actions unit-tests stage broken on main
+summary: >
+  A refactor of currencyservice's nanos carry logic changed rounding; the unit-tests stage of the ci workflow fails
+  with an assertion error. Re-running would not help: the fix is a revert pull request.
+service: currencyservice
+namespace: ci
+environment: ci
+repository: acme/online-boutique
+start: "2026-10-12T11:00:00Z"
+watch:
+  namespaces: []
+  pipelines: [ci]
+  repositories: [acme/online-boutique]
+ground_truth:
+  category: code_regression
+  component: currencyservice
+  root_cause: Commit e4c91f0 replaced Math.round with Math.floor in the nanos carry, breaking currency rounding.
+  fix: {type: pull_request, target: currencyservice}
+accepted_fixes:
+  - {type: pull_request, target: currencyservice}
+expected:
+  policy_verdict: auto_logged
+  blocked: false

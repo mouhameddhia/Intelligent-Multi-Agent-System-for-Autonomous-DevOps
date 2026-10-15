@@ -1,0 +1,1476 @@
+{
+  "$defs": {
+    "ActionTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "kind": {
+          "description": "deployment | configmap | pipeline | repository | pod | ...",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Namespace"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "environment"
+      ],
+      "title": "ActionTarget",
+      "type": "object"
+    },
+    "ActionType": {
+      "enum": [
+        "read",
+        "diagnose",
+        "propose",
+        "rerun_pipeline",
+        "restart",
+        "rollback",
+        "config_change",
+        "pull_request",
+        "scale",
+        "delete_resource"
+      ],
+      "title": "ActionType",
+      "type": "string"
+    },
+    "AgentStep": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "title": "Agent",
+          "type": "string"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        },
+        "llm_provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm Provider"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "default": "pending",
+          "enum": [
+            "pending",
+            "running",
+            "completed",
+            "skipped",
+            "failed",
+            "waiting"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "summary": {
+          "default": "",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "title": "AgentStep",
+      "type": "object"
+    },
+    "Approval": {
+      "additionalProperties": false,
+      "properties": {
+        "approver": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approver"
+        },
+        "decision": {
+          "enum": [
+            "pending",
+            "approved",
+            "rejected",
+            "not_required"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "timestamp": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timestamp"
+        }
+      },
+      "required": [
+        "required",
+        "decision"
+      ],
+      "title": "Approval",
+      "type": "object"
+    },
+    "ChangeInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "author": {
+          "title": "Author",
+          "type": "string"
+        },
+        "commit_sha": {
+          "title": "Commit Sha",
+          "type": "string"
+        },
+        "diff": {
+          "default": "",
+          "title": "Diff",
+          "type": "string"
+        },
+        "files_changed": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Files Changed",
+          "type": "array"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "repository": {
+          "title": "Repository",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "commit_sha",
+        "author",
+        "message",
+        "timestamp"
+      ],
+      "title": "ChangeInfo",
+      "type": "object"
+    },
+    "DeploymentInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "current_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Current Revision"
+        },
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "title": "Namespace",
+          "type": "string"
+        },
+        "pods": {
+          "items": {
+            "$ref": "#/$defs/PodState"
+          },
+          "title": "Pods",
+          "type": "array"
+        },
+        "previous_image": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Image"
+        },
+        "previous_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Previous Revision"
+        },
+        "recent_events": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Recent Events",
+          "type": "array"
+        },
+        "replicas_desired": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replicas Desired"
+        },
+        "replicas_ready": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Replicas Ready"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        }
+      },
+      "required": [
+        "namespace",
+        "name",
+        "service",
+        "environment"
+      ],
+      "title": "DeploymentInfo",
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "log",
+            "metric",
+            "change",
+            "k8s",
+            "pipeline",
+            "history",
+            "quality"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "ref": {
+          "description": "Pointer into the incident, e.g. log:P03, metric:error_rate, change:abc123",
+          "title": "Ref",
+          "type": "string"
+        },
+        "weight": {
+          "default": 0.0,
+          "title": "Weight",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "ref",
+        "description"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "ExecutionResult": {
+      "additionalProperties": false,
+      "properties": {
+        "action_type": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "details": {
+          "title": "Details",
+          "type": "string"
+        },
+        "executed_at": {
+          "format": "date-time",
+          "title": "Executed At",
+          "type": "string"
+        },
+        "output": {
+          "additionalProperties": true,
+          "title": "Output",
+          "type": "object"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "failed",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "action_type",
+        "provider",
+        "details",
+        "executed_at"
+      ],
+      "title": "ExecutionResult",
+      "type": "object"
+    },
+    "Hypothesis": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "title": "Category",
+          "type": "string"
+        },
+        "component": {
+          "title": "Component",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "rank": {
+          "title": "Rank",
+          "type": "integer"
+        },
+        "similar_incidents": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Similar Incidents",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rank",
+        "title",
+        "category",
+        "component",
+        "description",
+        "confidence"
+      ],
+      "title": "Hypothesis",
+      "type": "object"
+    },
+    "IncidentStatus": {
+      "enum": [
+        "monitoring",
+        "investigating",
+        "diagnosing",
+        "proposing",
+        "gating",
+        "awaiting_approval",
+        "executing",
+        "verifying",
+        "resolved",
+        "rejected",
+        "blocked",
+        "verification_failed",
+        "needs_attention",
+        "no_incident"
+      ],
+      "title": "IncidentStatus",
+      "type": "string"
+    },
+    "LogAnalysisSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "interpretation": {
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "key_errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Key Errors",
+          "type": "array"
+        },
+        "pattern_count": {
+          "title": "Pattern Count",
+          "type": "integer"
+        },
+        "patterns_sent_to_llm": {
+          "title": "Patterns Sent To Llm",
+          "type": "integer"
+        },
+        "raw_line_count": {
+          "title": "Raw Line Count",
+          "type": "integer"
+        },
+        "reduction_ratio": {
+          "description": "1 - (lines in LLM context / raw lines)",
+          "title": "Reduction Ratio",
+          "type": "number"
+        }
+      },
+      "required": [
+        "raw_line_count",
+        "pattern_count",
+        "patterns_sent_to_llm",
+        "reduction_ratio",
+        "interpretation"
+      ],
+      "title": "LogAnalysisSummary",
+      "type": "object"
+    },
+    "LogPattern": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "first_seen": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Seen"
+        },
+        "last_seen": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Seen"
+        },
+        "level": {
+          "title": "Level",
+          "type": "string"
+        },
+        "pattern_id": {
+          "title": "Pattern Id",
+          "type": "string"
+        },
+        "sample": {
+          "title": "Sample",
+          "type": "string"
+        },
+        "sources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sources",
+          "type": "array"
+        },
+        "template": {
+          "title": "Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern_id",
+        "template",
+        "count",
+        "level",
+        "sample"
+      ],
+      "title": "LogPattern",
+      "type": "object"
+    },
+    "MetricAnomaly": {
+      "additionalProperties": false,
+      "properties": {
+        "anomaly_start": {
+          "format": "date-time",
+          "title": "Anomaly Start",
+          "type": "string"
+        },
+        "baseline": {
+          "title": "Baseline",
+          "type": "number"
+        },
+        "detector": {
+          "enum": [
+            "ewma",
+            "zscore"
+          ],
+          "title": "Detector",
+          "type": "string"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "observed": {
+          "title": "Observed",
+          "type": "number"
+        },
+        "score": {
+          "title": "Score",
+          "type": "number"
+        },
+        "series": {
+          "items": {
+            "$ref": "#/$defs/MetricPoint"
+          },
+          "title": "Series",
+          "type": "array"
+        },
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric",
+        "service",
+        "detector",
+        "baseline",
+        "observed",
+        "score",
+        "threshold",
+        "anomaly_start"
+      ],
+      "title": "MetricAnomaly",
+      "type": "object"
+    },
+    "MetricPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ts",
+        "value"
+      ],
+      "title": "MetricPoint",
+      "type": "object"
+    },
+    "PipelineInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Branch"
+        },
+        "failed_stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failed Stage"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "pipeline_id": {
+          "title": "Pipeline Id",
+          "type": "string"
+        },
+        "provider": {
+          "title": "Provider",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "provider",
+        "pipeline_id",
+        "name",
+        "run_id",
+        "status"
+      ],
+      "title": "PipelineInfo",
+      "type": "object"
+    },
+    "PodState": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "phase": {
+          "title": "Phase",
+          "type": "string"
+        },
+        "ready": {
+          "default": false,
+          "title": "Ready",
+          "type": "boolean"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "restarts": {
+          "default": 0,
+          "title": "Restarts",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "phase"
+      ],
+      "title": "PodState",
+      "type": "object"
+    },
+    "PolicyDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "action_type": {
+          "$ref": "#/$defs/ActionType"
+        },
+        "alternative": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProposedAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "alternative_verdict": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto",
+                "auto_logged",
+                "require_approval",
+                "forbidden"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alternative Verdict"
+        },
+        "blocked_action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProposedAction"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "environment": {
+          "title": "Environment",
+          "type": "string"
+        },
+        "evaluated_at": {
+          "format": "date-time",
+          "title": "Evaluated At",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "rule_id": {
+          "title": "Rule Id",
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "auto",
+            "auto_logged",
+            "require_approval",
+            "forbidden"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "rule_id",
+        "reason",
+        "action_type",
+        "environment",
+        "evaluated_at"
+      ],
+      "title": "PolicyDecision",
+      "type": "object"
+    },
+    "ProposedAction": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_effect": {
+          "title": "Expected Effect",
+          "type": "string"
+        },
+        "hypothesis_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hypothesis Id"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "title": "Parameters",
+          "type": "object"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        },
+        "reversible": {
+          "default": true,
+          "title": "Reversible",
+          "type": "boolean"
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk"
+        },
+        "source": {
+          "default": "remediation",
+          "description": "remediation | policy_gate_alternative",
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/ActionTarget"
+        },
+        "type": {
+          "$ref": "#/$defs/ActionType"
+        }
+      },
+      "required": [
+        "type",
+        "target",
+        "expected_effect",
+        "risk"
+      ],
+      "title": "ProposedAction",
+      "type": "object"
+    },
+    "Risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "title": "Risk",
+      "type": "string"
+    },
+    "RunMetrics": {
+      "additionalProperties": false,
+      "description": "Measurements captured during the run, used by the evaluation tab.",
+      "properties": {
+        "analysis_wall_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wall-clock time from detection to diagnosis",
+          "title": "Analysis Wall Ms"
+        },
+        "detection_delay_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Simulated time from fault to detection",
+          "title": "Detection Delay S"
+        },
+        "llm_context_lines": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm Context Lines"
+        },
+        "raw_log_lines": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Log Lines"
+        }
+      },
+      "title": "RunMetrics",
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Severity",
+      "type": "string"
+    },
+    "TimeWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "TimeWindow",
+      "type": "object"
+    },
+    "TimelineEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "title": "Agent",
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ts",
+        "agent",
+        "kind",
+        "message"
+      ],
+      "title": "TimelineEvent",
+      "type": "object"
+    },
+    "Trigger": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "detected_at": {
+          "format": "date-time",
+          "title": "Detected At",
+          "type": "string"
+        },
+        "fault_started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Ground-truth fault start when known (simulation/evaluation only)",
+          "title": "Fault Started At"
+        },
+        "kind": {
+          "enum": [
+            "pipeline_failure",
+            "deployment_failure",
+            "pod_failure",
+            "metric_anomaly"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "signals": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Signals",
+          "type": "array"
+        },
+        "source": {
+          "description": "Provider that produced the signal, e.g. orchestration/simulated",
+          "title": "Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "source",
+        "description",
+        "detected_at"
+      ],
+      "title": "Trigger",
+      "type": "object"
+    },
+    "VerificationCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "passed",
+        "detail"
+      ],
+      "title": "VerificationCheck",
+      "type": "object"
+    },
+    "VerificationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "checks": {
+          "items": {
+            "$ref": "#/$defs/VerificationCheck"
+          },
+          "title": "Checks",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "healthy",
+            "unhealthy",
+            "inconclusive"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "verified_at": {
+          "format": "date-time",
+          "title": "Verified At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "verified_at"
+      ],
+      "title": "VerificationResult",
+      "type": "object"
+    }
+  },
+  "$id": "https://example.local/schema/incident.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Approval"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "change": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChangeInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "deployment": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeploymentInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "environment": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Environment"
+    },
+    "execution_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecutionResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "hypotheses": {
+      "items": {
+        "$ref": "#/$defs/Hypothesis"
+      },
+      "title": "Hypotheses",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "llm_providers_used": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Llm Providers Used",
+      "type": "array"
+    },
+    "log_patterns": {
+      "items": {
+        "$ref": "#/$defs/LogPattern"
+      },
+      "title": "Log Patterns",
+      "type": "array"
+    },
+    "log_summary": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LogAnalysisSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "metric_anomalies": {
+      "items": {
+        "$ref": "#/$defs/MetricAnomaly"
+      },
+      "title": "Metric Anomalies",
+      "type": "array"
+    },
+    "metrics": {
+      "$ref": "#/$defs/RunMetrics"
+    },
+    "missing_data": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing Data",
+      "type": "array"
+    },
+    "pipeline": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PipelineInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "policy_decision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PolicyDecision"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "proposed_action": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProposedAction"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "scenario_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Scenario Id"
+    },
+    "service": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Service"
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity",
+      "default": "medium"
+    },
+    "source": {
+      "default": "demo",
+      "enum": [
+        "demo",
+        "evaluation",
+        "api"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/IncidentStatus",
+      "default": "monitoring"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/$defs/AgentStep"
+      },
+      "title": "Steps",
+      "type": "array"
+    },
+    "time_window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeWindow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "timeline": {
+      "items": {
+        "$ref": "#/$defs/TimelineEvent"
+      },
+      "title": "Timeline",
+      "type": "array"
+    },
+    "title": {
+      "default": "Monitoring\u2026",
+      "title": "Title",
+      "type": "string"
+    },
+    "trigger": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Trigger"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "verification_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerificationResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "title": "Incident",
+  "type": "object"
+}

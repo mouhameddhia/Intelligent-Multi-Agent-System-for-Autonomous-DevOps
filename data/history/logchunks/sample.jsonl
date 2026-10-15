@@ -1,0 +1,2 @@
+{"log_id": "lc-0001", "build_log": "...\n[ERROR] Failed to execute goal compile ... cannot find symbol\n...", "chunk": "[ERROR] Failed to execute goal compile ... cannot find symbol", "keywords": ["ERROR", "cannot find symbol"], "category": "compilation"}
+{"log_id": "lc-0002", "build_log": "...\nFAIL src/app.test.js\n expect(received).toBe(expected)\n...", "chunk": "FAIL src/app.test.js expect(received).toBe(expected)", "keywords": ["FAIL"], "category": "test"}

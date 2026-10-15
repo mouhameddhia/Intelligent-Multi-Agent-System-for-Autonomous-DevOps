@@ -1,0 +1,56 @@
+{
+  "pipelines": [
+    {
+      "id": "deploy-production",
+      "name": "deploy-production",
+      "repository": "acme/online-boutique"
+    }
+  ],
+  "runs": [
+    {
+      "pipeline_id": "deploy-production",
+      "run_id": "5521",
+      "name": "deploy-production",
+      "status": "failed",
+      "branch": "main",
+      "commit_sha": "b71d2a9c0e5f4a1b8c3d2e1f0a9b8c7d6e5f4a3b",
+      "started_at": "2026-10-12T10:22:00Z",
+      "url": "https://github.com/acme/online-boutique/actions/runs/5521",
+      "stages": [
+        {
+          "name": "render-manifests",
+          "status": "success",
+          "started_at": "2026-10-12T10:22:00Z",
+          "finished_at": "2026-10-12T10:22:20Z"
+        },
+        {
+          "name": "kubectl-apply",
+          "status": "success",
+          "started_at": "2026-10-12T10:22:20Z",
+          "finished_at": "2026-10-12T10:23:00Z"
+        },
+        {
+          "name": "rollout-status",
+          "status": "failed",
+          "started_at": "2026-10-12T10:23:00Z",
+          "finished_at": "2026-10-12T10:30:00Z"
+        }
+      ],
+      "logs": {
+        "rollout-status": [
+          "2026-10-12T10:23:10Z INFO [deploy] Waiting for deployment \"productcatalogservice\" rollout to finish: 0 of 2 updated replicas are available...",
+          "2026-10-12T10:29:50Z ERROR [deploy] error: deployment \"productcatalogservice\" exceeded its progress deadline",
+          "2026-10-12T10:30:00Z ERROR [deploy] Error: Process completed with exit code 1."
+        ]
+      }
+    }
+  ],
+  "after_runs": [],
+  "quality": {
+    "ref": "main",
+    "tests_total": 412,
+    "tests_failed": 0,
+    "failed_tests": [],
+    "coverage": 0.71
+  }
+}

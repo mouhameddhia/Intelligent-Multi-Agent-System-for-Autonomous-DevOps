@@ -1,0 +1,20 @@
+{
+  "deployments": [
+    {
+      "name": "currencyservice",
+      "namespace": "ci",
+      "service": "currencyservice",
+      "environment": "ci",
+      "replicas_desired": 1,
+      "replicas_ready": 1,
+      "image": "gcr.io/acme/currencyservice:v0.10.1",
+      "revisions": [],
+      "config": {}
+    }
+  ],
+  "pods": [],
+  "events": [],
+  "after": {
+    "pods": []
+  }
+}

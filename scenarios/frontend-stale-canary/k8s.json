@@ -1,0 +1,161 @@
+{
+  "deployments": [
+    {
+      "name": "frontend",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "environment": "production",
+      "replicas_desired": 4,
+      "replicas_ready": 4,
+      "image": "gcr.io/acme/frontend:v0.10.1",
+      "revisions": [
+        {
+          "revision": 40,
+          "image": "gcr.io/acme/frontend:v0.10.1",
+          "created_at": "2026-10-09T12:25:00Z",
+          "change_cause": "release v0.10.1"
+        }
+      ],
+      "config": {
+        "labels": {
+          "app": "frontend",
+          "track": "stable"
+        }
+      }
+    },
+    {
+      "name": "frontend-canary",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "environment": "production",
+      "replicas_desired": 1,
+      "replicas_ready": 1,
+      "image": "gcr.io/acme/frontend:v0.9.0-canary",
+      "revisions": [
+        {
+          "revision": 3,
+          "image": "gcr.io/acme/frontend:v0.9.0-canary",
+          "created_at": "2026-09-25T12:25:00Z",
+          "change_cause": "canary experiment EXP-212 (abandoned)"
+        }
+      ],
+      "config": {
+        "labels": {
+          "app": "frontend",
+          "track": "canary"
+        },
+        "owner": "experiment EXP-212",
+        "last_deployed_days_ago": 17
+      }
+    }
+  ],
+  "pods": [
+    {
+      "name": "frontend-54b904195-jpdbc",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "phase": "Running",
+      "reason": null,
+      "restarts": 0,
+      "ready": true,
+      "image": "gcr.io/acme/frontend:v0.10.1"
+    },
+    {
+      "name": "frontend-9487d2dd0-d5ntb",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "phase": "Running",
+      "reason": null,
+      "restarts": 0,
+      "ready": true,
+      "image": "gcr.io/acme/frontend:v0.10.1"
+    },
+    {
+      "name": "frontend-e11e453f4-x5d6l",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "phase": "Running",
+      "reason": null,
+      "restarts": 0,
+      "ready": true,
+      "image": "gcr.io/acme/frontend:v0.10.1"
+    },
+    {
+      "name": "frontend-1fd0f7d46-2p68g",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "phase": "Running",
+      "reason": null,
+      "restarts": 0,
+      "ready": true,
+      "image": "gcr.io/acme/frontend:v0.10.1"
+    },
+    {
+      "name": "frontend-canary-c5e7a243d-fqp98",
+      "namespace": "boutique-prod",
+      "service": "frontend",
+      "phase": "Running",
+      "reason": null,
+      "restarts": 0,
+      "ready": true,
+      "image": "gcr.io/acme/frontend:v0.9.0-canary"
+    }
+  ],
+  "events": [
+    {
+      "ts": "2026-10-12T12:24:00Z",
+      "namespace": "boutique-prod",
+      "object": "virtualservice/frontend",
+      "type": "Normal",
+      "reason": "Updated",
+      "message": "VirtualService frontend route updated: subset selector track removed"
+    }
+  ],
+  "after": {
+    "pods": [
+      {
+        "name": "frontend-54b904195-jpdbc",
+        "namespace": "boutique-prod",
+        "service": "frontend",
+        "phase": "Running",
+        "reason": null,
+        "restarts": 0,
+        "ready": true,
+        "image": "gcr.io/acme/frontend:v0.10.1"
+      },
+      {
+        "name": "frontend-9487d2dd0-d5ntb",
+        "namespace": "boutique-prod",
+        "service": "frontend",
+        "phase": "Running",
+        "reason": null,
+        "restarts": 0,
+        "ready": true,
+        "image": "gcr.io/acme/frontend:v0.10.1"
+      },
+      {
+        "name": "frontend-e11e453f4-x5d6l",
+        "namespace": "boutique-prod",
+        "service": "frontend",
+        "phase": "Running",
+        "reason": null,
+        "restarts": 0,
+        "ready": true,
+        "image": "gcr.io/acme/frontend:v0.10.1"
+      },
+      {
+        "name": "frontend-1fd0f7d46-2p68g",
+        "namespace": "boutique-prod",
+        "service": "frontend",
+        "phase": "Running",
+        "reason": null,
+        "restarts": 0,
+        "ready": true,
+        "image": "gcr.io/acme/frontend:v0.10.1"
+      }
+    ],
+    "replicas_ready": {
+      "frontend-canary": 0
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "commits": [
+    {
+      "author": "s.ivanova",
+      "message": "ops(mesh): simplify frontend VirtualService routing to app label",
+      "files_changed": [
+        "istio-manifests/frontend-virtualservice.yaml"
+      ],
+      "diff": "--- a/istio-manifests/frontend-virtualservice.yaml\n+++ b/istio-manifests/frontend-virtualservice.yaml\n@@ -12,10 +12,6 @@ spec:\n   http:\n   - route:\n     - destination:\n         host: frontend\n-        subset: stable\n-  # canary subset kept for EXP-212, weight 0\n-  - destination:\n-      host: frontend\n-      subset: canary\n-    weight: 0\n",
+      "repository": "acme/online-boutique",
+      "sha": "b41eaf720f72c0656ab5f91ca288e381e8ec3da4",
+      "timestamp": "2026-10-12T12:24:00Z"
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "3bf3c2997b24532bc7c5e94bf62a2e5503cc9835",
+      "author": "maria.chen",
+      "message": "docs: update README badges",
+      "timestamp": "2026-10-12T06:25:00Z",
+      "files_changed": [
+        "README.md"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "9cbee3f337b64c9246da0053d8b027f0b552a3a0",
+      "author": "dev-bot",
+      "message": "test(frontend): add e2e smoke for /cart",
+      "timestamp": "2026-10-12T01:25:00Z",
+      "files_changed": [
+        "src/frontend/e2e/cart.spec.ts"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "2c6dd80bbb8e7ed3a12e34b20d0b8a33d97d2ccb",
+      "author": "renovate[bot]",
+      "message": "chore(deps): bump grpc-go to 1.66.2",
+      "timestamp": "2026-10-11T20:25:00Z",
+      "files_changed": [
+        "src/frontend/go.mod",
+        "src/frontend/go.sum"
+      ],
+      "diff": ""
+    }
+  ]
+}

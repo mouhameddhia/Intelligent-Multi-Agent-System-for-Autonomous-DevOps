@@ -1,0 +1,26 @@
+id: checkout-config-crashloop
+order: 1
+title: checkoutservice CrashLoopBackOff after a ConfigMap change
+summary: >
+  A refactor moved PAYMENT_SERVICE_ADDR into a ConfigMap and dropped the port separator.
+  checkoutservice fails config validation on boot and crash-loops; checkout requests from the frontend fail.
+service: checkoutservice
+namespace: boutique-prod
+environment: production
+repository: acme/online-boutique
+start: "2026-10-12T08:00:00Z"
+watch:
+  namespaces: [boutique-prod]
+  pipelines: []
+  repositories: [acme/online-boutique]
+ground_truth:
+  category: config_error
+  component: checkoutservice
+  root_cause: Malformed PAYMENT_SERVICE_ADDR ("paymentservice50051", missing ':port') in ConfigMap checkout-config.
+  fix: {type: config_change, target: checkoutservice}
+accepted_fixes:
+  - {type: config_change, target: checkoutservice}
+  - {type: rollback, target: checkoutservice}
+expected:
+  policy_verdict: require_approval
+  blocked: false

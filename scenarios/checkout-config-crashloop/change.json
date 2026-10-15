@@ -1,0 +1,50 @@
+{
+  "commits": [
+    {
+      "author": "j.ramirez",
+      "message": "chore(checkout): move payment address into checkout-config ConfigMap",
+      "files_changed": [
+        "kubernetes-manifests/checkoutservice-configmap.yaml",
+        "kubernetes-manifests/checkoutservice.yaml"
+      ],
+      "diff": "--- a/kubernetes-manifests/checkoutservice-configmap.yaml\n+++ b/kubernetes-manifests/checkoutservice-configmap.yaml\n@@ -4,7 +4,7 @@ metadata:\n   name: checkout-config\n data:\n   CART_SERVICE_ADDR: \"cartservice:7070\"\n-  PAYMENT_SERVICE_ADDR: \"paymentservice:50051\"\n+  PAYMENT_SERVICE_ADDR: \"paymentservice50051\"\n   SHIPPING_SERVICE_ADDR: \"shippingservice:50051\"\n   EMAIL_SERVICE_ADDR: \"emailservice:5000\"\n--- a/kubernetes-manifests/checkoutservice.yaml\n+++ b/kubernetes-manifests/checkoutservice.yaml\n@@ -31,8 +31,9 @@ spec:\n         env:\n-        - name: PAYMENT_SERVICE_ADDR\n-          value: \"paymentservice:50051\"\n+        envFrom:\n+        - configMapRef:\n+            name: checkout-config\n",
+      "repository": "acme/online-boutique",
+      "sha": "1f244d761996eb6cf2105eb9985803205d5ed732",
+      "timestamp": "2026-10-12T08:22:00Z"
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "51c8585ce2bac83fc88a327feb537ec398fcc6db",
+      "author": "maria.chen",
+      "message": "docs: update README badges",
+      "timestamp": "2026-10-12T02:25:00Z",
+      "files_changed": [
+        "README.md"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "9ac49065e373cd71e38107ab6ddf59cec52e96fd",
+      "author": "dev-bot",
+      "message": "test(frontend): add e2e smoke for /cart",
+      "timestamp": "2026-10-11T21:25:00Z",
+      "files_changed": [
+        "src/frontend/e2e/cart.spec.ts"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "83cf705c2fb73c8844e98a19592e1db031824908",
+      "author": "renovate[bot]",
+      "message": "chore(deps): bump grpc-go to 1.66.2",
+      "timestamp": "2026-10-11T16:25:00Z",
+      "files_changed": [
+        "src/frontend/go.mod",
+        "src/frontend/go.sum"
+      ],
+      "diff": ""
+    }
+  ]
+}

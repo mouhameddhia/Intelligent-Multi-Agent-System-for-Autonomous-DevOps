@@ -1,0 +1,138 @@
+# Synthetic past incidents for the Online Boutique estate (normalized by the seed loader).
+# Fields: id, service, time, symptoms, root_cause, fix, category, fix_action
+- {id: H-001, service: checkoutservice, time: "2026-03-02T10:14:00Z", category: config_error, fix_action: config_change,
+   symptoms: "checkoutservice pods CrashLoopBackOff after deploy; log 'invalid SHIPPING_SERVICE_ADDR missing port in address'; frontend checkout 500",
+   root_cause: "Environment variable SHIPPING_SERVICE_ADDR set without port in deployment manifest",
+   fix: "Corrected the env var value in the ConfigMap and restarted the deployment"}
+- {id: H-002, service: emailservice, time: "2026-02-11T08:40:00Z", category: config_error, fix_action: config_change,
+   symptoms: "emailservice exits on boot: 'failed to parse config: yaml: line 12: mapping values are not allowed'; CrashLoopBackOff",
+   root_cause: "Malformed YAML in emailservice ConfigMap after manual edit",
+   fix: "Reverted ConfigMap to previous version from git"}
+- {id: H-003, service: paymentservice, time: "2026-01-20T16:05:00Z", category: config_error, fix_action: rollback,
+   symptoms: "paymentservice CrashLoopBackOff, 'missing required env STRIPE_API_VERSION', checkout failures",
+   root_cause: "Required configuration key removed by a refactor of the Helm values",
+   fix: "Rolled back the Helm release to the previous revision, then re-added the key"}
+- {id: H-004, service: currencyservice, time: "2026-04-18T12:31:00Z", category: config_error, fix_action: config_change,
+   symptoms: "currencyservice health checks failing, 'PORT environment variable is not a number'",
+   root_cause: "Quoted port value with trailing whitespace in ConfigMap",
+   fix: "Fixed ConfigMap value and rolled pods"}
+- {id: H-005, service: cartservice, time: "2026-05-07T09:12:00Z", category: memory_limit, fix_action: config_change,
+   symptoms: "cartservice OOMKilled exit code 137 every few minutes; GC heap usage near limit; frontend 'could not retrieve cart'",
+   root_cause: "Memory limit 256Mi too low for cart cache after traffic growth",
+   fix: "Raised memory limit to 512Mi and set cache eviction"}
+- {id: H-006, service: recommendationservice, time: "2026-03-28T14:44:00Z", category: memory_limit, fix_action: config_change,
+   symptoms: "recommendationservice pods OOMKilled, python process RSS grows to limit, restarts climbing",
+   root_cause: "Memory limit too low for model loaded at startup",
+   fix: "Increased memory limit from 220Mi to 450Mi"}
+- {id: H-007, service: adservice, time: "2026-02-25T19:02:00Z", category: memory_limit, fix_action: config_change,
+   symptoms: "adservice java.lang.OutOfMemoryError: Java heap space; container killed with exit 137",
+   root_cause: "JVM -Xmx larger than container memory limit",
+   fix: "Aligned -Xmx with the container limit and raised limit to 600Mi"}
+- {id: H-008, service: cartservice, time: "2026-06-14T07:55:00Z", category: dependency_unavailable, fix_action: restart,
+   symptoms: "cartservice errors 'Can't access cart storage. StackExchange.Redis.RedisConnectionException' frontend cart failures",
+   root_cause: "redis-cart pod evicted due to node pressure",
+   fix: "Restarted redis-cart and added PodDisruptionBudget"}
+- {id: H-009, service: productcatalogservice, time: "2026-04-02T11:20:00Z", category: bad_image, fix_action: rollback,
+   symptoms: "rollout stuck, new pods ImagePullBackOff 'manifest unknown', frontend latency high, deploy pipeline rollout-status failed",
+   root_cause: "Release pipeline referenced an image tag that was never pushed to the registry",
+   fix: "Rolled back deployment to previous revision; fixed release job ordering"}
+- {id: H-010, service: frontend, time: "2026-01-09T15:15:00Z", category: bad_image, fix_action: rollback,
+   symptoms: "frontend ErrImagePull 'unauthorized: authentication required' after registry migration",
+   root_cause: "Image pull secret missing in namespace after registry move",
+   fix: "Rolled back to previous registry path, recreated pull secret"}
+- {id: H-011, service: shippingservice, time: "2026-05-22T10:10:00Z", category: bad_image, fix_action: rollback,
+   symptoms: "shippingservice new replicaset pods crash 'exec format error' after deploy",
+   root_cause: "arm64 image deployed to amd64 nodes",
+   fix: "Rolled back deployment and fixed multi-arch build"}
+- {id: H-012, service: currencyservice, time: "2026-06-03T13:00:00Z", category: code_regression, fix_action: pull_request,
+   symptoms: "ci unit-tests failed AssertionError currency conversion expected 5.25 got 5.24",
+   root_cause: "Rounding change in conversion function",
+   fix: "Opened revert pull request; added property-based test for rounding"}
+- {id: H-013, service: checkoutservice, time: "2026-03-15T09:30:00Z", category: code_regression, fix_action: pull_request,
+   symptoms: "ci go test failed TestPlaceOrder: order total mismatch after refactor",
+   root_cause: "Refactor dropped shipping cost from total",
+   fix: "Revert PR merged, follow-up fix with test"}
+- {id: H-014, service: frontend, time: "2026-02-02T17:45:00Z", category: flaky_test, fix_action: rerun_pipeline,
+   symptoms: "ci e2e tests timed out waiting for selector intermittently; passes on rerun",
+   root_cause: "Flaky e2e test depending on network timing",
+   fix: "Re-ran pipeline; quarantined test ticket opened"}
+- {id: H-015, service: emailservice, time: "2026-04-27T08:05:00Z", category: flaky_test, fix_action: rerun_pipeline,
+   symptoms: "ci python tests 'connection refused localhost:8080' in unit tests, intermittent",
+   root_cause: "Test server not ready before tests started (race)",
+   fix: "Re-ran job; added readiness wait"}
+- {id: H-016, service: frontend, time: "2026-05-30T21:10:00Z", category: stale_canary, fix_action: delete_resource,
+   symptoms: "frontend 5xx ~15% after mesh change; errors only from canary pods running old version",
+   root_cause: "Old canary deployment left running started receiving traffic after VirtualService change",
+   fix: "Deleted the stale canary deployment frontend-canary"}
+- {id: H-017, service: productcatalogservice, time: "2026-06-21T12:12:00Z", category: stale_canary, fix_action: scale,
+   symptoms: "intermittent 500 from productcatalog canary pods, wrong product data version",
+   root_cause: "Canary deployment from abandoned experiment still selected by Service",
+   fix: "Scaled canary to zero replicas, removed label from selector"}
+- {id: H-018, service: frontend, time: "2026-03-05T06:40:00Z", category: cpu_throttling, fix_action: config_change,
+   symptoms: "frontend p95 latency 1.8s, container CPU throttling 80%, no errors",
+   root_cause: "CPU limit 200m too low during peak traffic",
+   fix: "Raised CPU limit and enabled HPA"}
+- {id: H-019, service: recommendationservice, time: "2026-04-09T10:22:00Z", category: cpu_throttling, fix_action: config_change,
+   symptoms: "recommendationservice slow, frontend deadline exceeded on ListRecommendations",
+   root_cause: "CPU limits too low after node pool change",
+   fix: "Increased CPU limit"}
+- {id: H-020, service: checkoutservice, time: "2026-01-29T13:13:00Z", category: dependency_unavailable, fix_action: restart,
+   symptoms: "checkoutservice 'rpc error: code = Unavailable desc = connection refused' calling paymentservice",
+   root_cause: "paymentservice pods stuck after node drain",
+   fix: "Restarted paymentservice deployment"}
+- {id: H-021, service: frontend, time: "2026-06-08T09:48:00Z", category: dependency_unavailable, fix_action: restart,
+   symptoms: "frontend could not retrieve product: DeadlineExceeded; productcatalogservice healthy but slow",
+   root_cause: "productcatalogservice goroutine leak after long uptime",
+   fix: "Restarted productcatalogservice; leak fixed in next release"}
+- {id: H-022, service: shippingservice, time: "2026-02-17T11:11:00Z", category: network_policy, fix_action: config_change,
+   symptoms: "checkout fails 'connection timed out' to shippingservice after NetworkPolicy rollout",
+   root_cause: "New default-deny NetworkPolicy missing ingress rule for checkoutservice",
+   fix: "Added ingress rule to NetworkPolicy"}
+- {id: H-023, service: frontend, time: "2026-05-12T00:01:00Z", category: cert_expired, fix_action: config_change,
+   symptoms: "ingress TLS handshake failures, 'x509: certificate has expired'",
+   root_cause: "cert-manager renewal failed due to DNS challenge misconfiguration",
+   fix: "Fixed ClusterIssuer and forced renewal"}
+- {id: H-024, service: cartservice, time: "2026-03-21T18:30:00Z", category: dependency_unavailable, fix_action: config_change,
+   symptoms: "redis timeouts in cartservice; redis maxclients reached",
+   root_cause: "Connection pool not reused after library upgrade",
+   fix: "Configured connection multiplexer as singleton; raised maxclients temporarily"}
+- {id: H-025, service: adservice, time: "2026-06-26T15:35:00Z", category: bad_image, fix_action: rollback,
+   symptoms: "adservice ImagePullBackOff after tag typo v1.1O (letter O)",
+   root_cause: "Typo in image tag in kustomization",
+   fix: "Rolled back to previous revision and fixed tag"}
+- {id: H-026, service: paymentservice, time: "2026-04-14T07:07:00Z", category: memory_limit, fix_action: config_change,
+   symptoms: "node.js heap out of memory, paymentservice OOMKilled under load test",
+   root_cause: "Memory limit lowered by cost optimisation commit",
+   fix: "Restored previous memory limit"}
+- {id: H-027, service: frontend, time: "2026-02-08T10:55:00Z", category: config_error, fix_action: rollback,
+   symptoms: "frontend panics 'template: home.html: nil pointer' after feature flag config change",
+   root_cause: "Feature flag enabled without required currency data",
+   fix: "Rolled back flag configuration"}
+- {id: H-028, service: currencyservice, time: "2026-05-18T14:20:00Z", category: disk_pressure, fix_action: restart,
+   symptoms: "pods evicted 'The node was low on resource: ephemeral-storage'",
+   root_cause: "Debug logging to local disk filled ephemeral storage",
+   fix: "Disabled debug logging and restarted pods"}
+- {id: H-029, service: checkoutservice, time: "2026-06-30T16:16:00Z", category: dns, fix_action: restart,
+   symptoms: "intermittent 'no such host' resolving emailservice from checkoutservice",
+   root_cause: "CoreDNS pods overloaded",
+   fix: "Scaled CoreDNS and restarted affected pods"}
+- {id: H-030, service: frontend, time: "2026-01-14T12:00:00Z", category: rate_limit, fix_action: config_change,
+   symptoms: "frontend 429 from currency API provider, conversion failures",
+   root_cause: "Upstream rate limit reached after cache TTL change",
+   fix: "Restored cache TTL to 60 minutes"}
+- {id: H-031, service: shippingservice, time: "2026-03-09T09:09:00Z", category: code_regression, fix_action: pull_request,
+   symptoms: "ci unit-tests failing TestGetQuote expected 8.99 got 0",
+   root_cause: "Quote calculation regression in refactor",
+   fix: "Revert pull request"}
+- {id: H-032, service: cartservice, time: "2026-04-22T22:22:00Z", category: flaky_test, fix_action: rerun_pipeline,
+   symptoms: "ci dotnet test timeout connecting to redis testcontainer",
+   root_cause: "Testcontainer startup slow on shared runners",
+   fix: "Re-ran pipeline; increased container startup timeout"}
+- {id: H-033, service: emailservice, time: "2026-06-11T10:40:00Z", category: config_error, fix_action: config_change,
+   symptoms: "emailservice crash 'invalid port in address emailservice8080'",
+   root_cause: "Missing colon in service address env value",
+   fix: "Corrected address in ConfigMap"}
+- {id: H-034, service: productcatalogservice, time: "2026-05-03T03:30:00Z", category: config_error, fix_action: rollback,
+   symptoms: "productcatalogservice fails to load products.json 'unexpected end of JSON input'",
+   root_cause: "Truncated catalog file shipped in ConfigMap",
+   fix: "Rolled back ConfigMap to previous revision"}

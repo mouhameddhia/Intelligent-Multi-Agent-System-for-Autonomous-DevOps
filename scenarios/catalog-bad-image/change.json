@@ -1,0 +1,50 @@
+{
+  "commits": [
+    {
+      "sha": "b71d2a9c0e5f4a1b8c3d2e1f0a9b8c7d6e5f4a3b",
+      "author": "release-bot",
+      "message": "release(productcatalog): bump image to v0.10.2-rc1",
+      "files_changed": [
+        "kubernetes-manifests/productcatalogservice.yaml",
+        "release/versions.env"
+      ],
+      "diff": "--- a/kubernetes-manifests/productcatalogservice.yaml\n+++ b/kubernetes-manifests/productcatalogservice.yaml\n@@ -27,7 +27,7 @@ spec:\n       containers:\n       - name: server\n-        image: gcr.io/acme/productcatalogservice:v0.10.1\n+        image: gcr.io/acme/productcatalogservice:v0.10.2-rc1\n         ports:\n         - containerPort: 3550\n--- a/release/versions.env\n+++ b/release/versions.env\n@@ -3,1 +3,1 @@\n-PRODUCTCATALOG_VERSION=v0.10.1\n+PRODUCTCATALOG_VERSION=v0.10.2-rc1\n",
+      "repository": "acme/online-boutique",
+      "timestamp": "2026-10-12T10:22:00Z"
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "26f6f3cf7ddaa7335e8f4b7b166248c782311157",
+      "author": "maria.chen",
+      "message": "docs: update README badges",
+      "timestamp": "2026-10-12T04:25:00Z",
+      "files_changed": [
+        "README.md"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "90f23e637d07a05915b01e0fc075a96605dd9bfa",
+      "author": "dev-bot",
+      "message": "test(frontend): add e2e smoke for /cart",
+      "timestamp": "2026-10-11T23:25:00Z",
+      "files_changed": [
+        "src/frontend/e2e/cart.spec.ts"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "41821ee37b37d6c07aee8bcbb452e6bbf199ffaf",
+      "author": "renovate[bot]",
+      "message": "chore(deps): bump grpc-go to 1.66.2",
+      "timestamp": "2026-10-11T18:25:00Z",
+      "files_changed": [
+        "src/frontend/go.mod",
+        "src/frontend/go.sum"
+      ],
+      "diff": ""
+    }
+  ]
+}

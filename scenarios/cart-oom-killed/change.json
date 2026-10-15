@@ -1,0 +1,49 @@
+{
+  "commits": [
+    {
+      "author": "finops-bot",
+      "message": "chore(resources): right-size staging requests/limits to cut cluster cost",
+      "files_changed": [
+        "kubernetes-manifests/overlays/staging/cartservice-resources.yaml"
+      ],
+      "diff": "--- a/kubernetes-manifests/overlays/staging/cartservice-resources.yaml\n+++ b/kubernetes-manifests/overlays/staging/cartservice-resources.yaml\n@@ -9,9 +9,9 @@ spec:\n         resources:\n           requests:\n             cpu: 200m\n-            memory: 128Mi\n+            memory: 64Mi\n           limits:\n             cpu: 300m\n-            memory: 512Mi\n+            memory: 128Mi\n",
+      "repository": "acme/online-boutique",
+      "sha": "9c23900885b91604ea827ed89c6796d9ec3344e4",
+      "timestamp": "2026-10-12T09:21:00Z"
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "a19c0e7db1a12cee455bab2a0d8ed71dda1b2127",
+      "author": "maria.chen",
+      "message": "docs: update README badges",
+      "timestamp": "2026-10-12T03:25:00Z",
+      "files_changed": [
+        "README.md"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "faeb710f2c2cbeb1dde96bfab9f225c494d9073b",
+      "author": "dev-bot",
+      "message": "test(frontend): add e2e smoke for /cart",
+      "timestamp": "2026-10-11T22:25:00Z",
+      "files_changed": [
+        "src/frontend/e2e/cart.spec.ts"
+      ],
+      "diff": ""
+    },
+    {
+      "repository": "acme/online-boutique",
+      "sha": "eca660ab0d60f618a39f48712bc8fdd108d0dd8f",
+      "author": "renovate[bot]",
+      "message": "chore(deps): bump grpc-go to 1.66.2",
+      "timestamp": "2026-10-11T17:25:00Z",
+      "files_changed": [
+        "src/frontend/go.mod",
+        "src/frontend/go.sum"
+      ],
+      "diff": ""
+    }
+  ]
+}

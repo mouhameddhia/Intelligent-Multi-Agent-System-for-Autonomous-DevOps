@@ -1,0 +1,2 @@
+{"case_id": "re2-ob-cartservice-mem-1", "system": "online-boutique", "root_cause_service": "cartservice", "fault_type": "mem", "inject_time": "2026-01-01T00:10:00Z", "metrics_file": "cartservice_mem.csv"}
+{"case_id": "re2-ob-checkoutservice-cpu-1", "system": "online-boutique", "root_cause_service": "checkoutservice", "fault_type": "cpu", "inject_time": "2026-01-01T00:10:00Z", "metrics_file": "checkoutservice_cpu.csv"}

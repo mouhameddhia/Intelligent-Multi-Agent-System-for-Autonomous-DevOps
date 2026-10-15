@@ -1,0 +1,25 @@
+id: catalog-bad-image
+order: 3
+title: productcatalogservice rollout stuck on a non-existent image tag
+summary: >
+  The release bot bumped productcatalogservice to v0.10.2-rc1, a tag that was never pushed.
+  New pods sit in ImagePullBackOff, capacity is halved and frontend latency explodes. A rollback is needed in production.
+service: productcatalogservice
+namespace: boutique-prod
+environment: production
+repository: acme/online-boutique
+start: "2026-10-12T10:00:00Z"
+watch:
+  namespaces: [boutique-prod]
+  pipelines: [deploy-production]
+  repositories: [acme/online-boutique]
+ground_truth:
+  category: bad_image
+  component: productcatalogservice
+  root_cause: Image tag gcr.io/acme/productcatalogservice:v0.10.2-rc1 does not exist (manifest unknown).
+  fix: {type: rollback, target: productcatalogservice}
+accepted_fixes:
+  - {type: rollback, target: productcatalogservice}
+expected:
+  policy_verdict: require_approval
+  blocked: false

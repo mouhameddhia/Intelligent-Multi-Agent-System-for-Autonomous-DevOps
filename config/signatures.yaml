@@ -1,0 +1,67 @@
+# Root-cause signatures used by the Diagnosis agent to generate and score candidate hypotheses.
+# Evidence channels and their weights (sum of matched channel weights = heuristic score, capped at 0.97):
+#   logs (error/warn pattern terms), k8s (pod reasons / event reasons), change (files + message terms),
+#   metrics (anomalous metric names), pipeline (failed stage / quality), history (similar past incidents).
+weights: {logs: 0.30, k8s: 0.22, change: 0.18, metrics: 0.10, pipeline: 0.25, history: 0.12}
+
+signatures:
+  - category: config_error
+    title: Invalid configuration value in {service}
+    description: A recent configuration change introduced a value the service rejects at start-up, so it exits and crash-loops.
+    log_terms: [invalid, "failed to parse", "missing port", "validation failed", "missing required", "config"]
+    k8s_reasons: [CrashLoopBackOff, BackOff]
+    change_terms: [configmap, config, env, ".env", values]
+    metrics: [restarts, error_rate]
+  - category: memory_limit
+    title: Memory limit too low for {service}
+    description: The container's memory limit is below its working set; the kernel OOM-kills it and the pod restarts.
+    log_terms: [outofmemory, "out of memory", "heap", "oomkilled", "exit code 137", "memory"]
+    k8s_reasons: [OOMKilled]
+    change_terms: [resources, memory, limits, "right-size"]
+    metrics: [memory_working_set_mib, restarts]
+  - category: bad_image
+    title: Deployment references a missing or broken image for {service}
+    description: The rollout points to an image that cannot be pulled, so new pods never become ready and the rollout stalls.
+    log_terms: ["failed to pull image", "manifest unknown", imagepullbackoff, errimagepull, "not found"]
+    k8s_reasons: [ImagePullBackOff, ErrImagePull, Failed]
+    change_terms: [image, release, tag, version]
+    metrics: [unavailable_replicas, latency_p95_ms, error_rate]
+    pipeline_stages: [rollout-status, deploy]
+  - category: code_regression
+    title: Code regression in {service} breaks the test suite
+    description: The latest commit changed behaviour covered by tests; the failure is deterministic and will recur on rerun.
+    log_terms: [assertionerror, "expected", failing, "test failed", "err_assertion"]
+    k8s_reasons: []
+    change_terms: ["src/", ".js", ".go", ".py", ".cs", refactor]
+    metrics: []
+    pipeline_stages: [unit-tests, test]
+  - category: flaky_test
+    title: Flaky test or CI runner issue in {service}
+    description: A non-deterministic test or runner problem; a rerun is usually enough.
+    log_terms: ["timed out", timeout, "connection refused", "econnreset", "flaky"]
+    k8s_reasons: []
+    change_terms: []
+    metrics: []
+    pipeline_stages: [unit-tests, test, e2e]
+  - category: dependency_unavailable
+    title: Downstream dependency of {service} unavailable
+    description: Calls to a downstream service fail (refused / unavailable / deadline exceeded); the dependency is unhealthy.
+    log_terms: ["connection refused", unavailable, "deadline exceeded", "transport is closing", "could not retrieve"]
+    k8s_reasons: []
+    change_terms: []
+    metrics: [error_rate, latency_p95_ms]
+  - category: stale_canary
+    title: Stale canary of {service} is receiving production traffic
+    description: An old canary deployment is selected by routing and serves errors to a fraction of users.
+    log_terms: [canary, "nil pointer", "status=500"]
+    k8s_reasons: []
+    change_terms: [virtualservice, subset, route, mesh, canary]
+    metrics: [error_rate]
+    requires_canary: true
+  - category: cpu_throttling
+    title: CPU limit throttles {service}
+    description: The service is CPU-throttled, increasing latency without hard failures.
+    log_terms: [throttl, "slow request"]
+    k8s_reasons: []
+    change_terms: [cpu, resources]
+    metrics: [latency_p95_ms]

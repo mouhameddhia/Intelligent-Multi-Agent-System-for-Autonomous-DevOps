@@ -1,0 +1,43 @@
+{
+  "pipelines": [
+    {
+      "id": "ci",
+      "name": "ci",
+      "repository": "acme/online-boutique"
+    }
+  ],
+  "runs": [
+    {
+      "pipeline_id": "ci",
+      "run_id": "11823",
+      "name": "ci",
+      "status": "success",
+      "branch": "main",
+      "commit_sha": null,
+      "started_at": null,
+      "stages": [
+        {
+          "name": "build",
+          "status": "success"
+        },
+        {
+          "name": "unit-tests",
+          "status": "success"
+        },
+        {
+          "name": "push-image",
+          "status": "success"
+        }
+      ],
+      "logs": {}
+    }
+  ],
+  "after_runs": [],
+  "quality": {
+    "ref": "main",
+    "tests_total": 412,
+    "tests_failed": 0,
+    "failed_tests": [],
+    "coverage": 0.71
+  }
+}

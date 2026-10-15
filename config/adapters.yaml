@@ -1,0 +1,35 @@
+# Adapter selection per provider. `simulated` replays scenario fixtures (offline, the default).
+# Real adapters are thin, read-only by default (allow_writes: false) and disabled unless `enabled: true`
+# and their connection settings / credentials are present. Credentials come from environment variables only.
+providers:
+  pipeline: simulated        # simulated | github_actions
+  logging: simulated         # simulated | loki
+  observability: simulated   # simulated | prometheus
+  repository: simulated      # simulated | github_actions (uses the GitHub REST API)
+  orchestration: simulated   # simulated | kubernetes
+  quality: simulated         # simulated
+
+adapters:
+  github_actions:
+    enabled: false
+    repository: acme/online-boutique
+    api_url: https://api.github.com
+    token_env: GITHUB_TOKEN
+    allow_writes: false
+  prometheus:
+    enabled: false
+    url: http://localhost:9090
+    watched:
+      - {name: error_rate, service: frontend, query: 'sum(rate(http_requests_total{app="frontend",code=~"5.."}[1m])) / sum(rate(http_requests_total{app="frontend"}[1m]))'}
+    allow_writes: false
+  loki:
+    enabled: false
+    url: http://localhost:3100
+    selector_template: '{app="%s"}'
+    allow_writes: false
+  kubernetes:
+    enabled: false
+    api_url: https://kubernetes.default.svc
+    token_env: KUBE_TOKEN
+    verify_tls: true
+    allow_writes: false

@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body { font-feature-settings: "cv11", "ss01"; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 8px; border: 2px solid #020617; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { 0% { background-color: rgba(99, 102, 241, 0.35); } 100% { background-color: transparent; } }
+
+.recharts-tooltip-wrapper { outline: none; }

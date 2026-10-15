@@ -1,0 +1,47 @@
+# Remediation templates per root-cause category. The Remediation agent picks the action type from the runbook /
+# similar past incidents (weighted vote over `allowed_actions`), falling back to `default_action`.
+# It only PROPOSES; the PolicyGate and (if needed) a human decide; the execute node acts.
+templates:
+  config_error:
+    default_action: config_change
+    allowed_actions: [config_change, rollback]
+    expected_effect: Pods start with the last known good configuration and pass readiness; error rate returns to baseline.
+  memory_limit:
+    default_action: config_change
+    allowed_actions: [config_change, rollback]
+    expected_effect: Memory limit covers the working set; OOMKills stop and restarts flatten.
+  bad_image:
+    default_action: rollback
+    allowed_actions: [rollback]
+    expected_effect: Deployment returns to the last image that pulled successfully; all replicas become available.
+  code_regression:
+    default_action: pull_request
+    allowed_actions: [pull_request]
+    expected_effect: Revert PR restores the previous behaviour; the unit-tests stage passes on the PR branch.
+  flaky_test:
+    default_action: rerun_pipeline
+    allowed_actions: [rerun_pipeline]
+    expected_effect: The flaky job passes on rerun.
+  dependency_unavailable:
+    default_action: restart
+    allowed_actions: [restart]
+    expected_effect: The dependency restarts healthy; callers recover.
+  stale_canary:
+    default_action: delete_resource
+    allowed_actions: [delete_resource, scale]
+    expected_effect: The stale canary stops serving traffic; frontend 5xx rate returns to baseline.
+  cpu_throttling:
+    default_action: config_change
+    allowed_actions: [config_change]
+    expected_effect: CPU limit raised; latency returns to baseline.
+
+risk:
+  # base risk by action type, bumped one level in production for mutating actions
+  read: low
+  rerun_pipeline: low
+  pull_request: low
+  restart: low
+  config_change: low
+  scale: low
+  rollback: medium
+  delete_resource: high

@@ -1,0 +1,57 @@
+# PolicyGate rules. Rule-based, no LLM. Evaluated top to bottom; the first matching rule wins.
+# verdicts: auto | auto_logged | require_approval | forbidden
+# A rule matches when every listed condition matches (missing condition = any).
+version: 1
+default:
+  verdict: require_approval
+  reason: No rule matched; failing safe to human approval.
+
+rules:
+  - id: P001-read-only
+    description: Reading, diagnosing and proposing are always automatic.
+    action_types: [read, diagnose, propose]
+    verdict: auto
+
+  - id: P010-forbid-prod-delete
+    description: Deleting production resources is forbidden. Suggest a reversible alternative.
+    action_types: [delete_resource]
+    environments: [production]
+    verdict: forbidden
+    alternative:
+      type: scale
+      parameters: {replicas: 0}
+      expected_effect: Stops the workload from serving traffic while keeping the resource and its history (fully reversible).
+      risk: medium
+
+  - id: P011-forbid-delete-default
+    description: Deletes anywhere else still need a human.
+    action_types: [delete_resource]
+    verdict: require_approval
+
+  - id: P020-high-risk-needs-human
+    description: Any high-risk action needs a human, whatever the environment.
+    risk: [high]
+    verdict: require_approval
+
+  - id: P030-nonprod-restart-rerun
+    description: Restart or rerun in staging/CI/dev is automatic and logged.
+    action_types: [restart, rerun_pipeline]
+    environments: [staging, ci, dev]
+    verdict: auto_logged
+
+  - id: P031-nonprod-config
+    description: Config changes outside production are automatic and logged.
+    action_types: [config_change, scale]
+    environments: [staging, ci, dev]
+    verdict: auto_logged
+
+  - id: P040-pull-request
+    description: Opening a pull request is automatic and logged (merging still goes through code review).
+    action_types: [pull_request]
+    verdict: auto_logged
+
+  - id: P050-prod-changes-need-approval
+    description: Rollback, restart, rerun, config change or scale in production requires human approval.
+    action_types: [rollback, restart, rerun_pipeline, config_change, scale]
+    environments: [production]
+    verdict: require_approval

@@ -1,0 +1,33 @@
+# Runbook entries (normalized into the history store with source=runbook).
+- {id: RB-CRASHLOOP-CONFIG, service: "*", category: config_error, fix_action: config_change,
+   symptoms: "CrashLoopBackOff shortly after a ConfigMap or env change; config validation or parse errors in logs",
+   root_cause: "Invalid configuration value",
+   fix: "Diff the ConfigMap against the previous revision; restore the last known good value; restart pods. If unclear, roll back the deployment."}
+- {id: RB-OOM, service: "*", category: memory_limit, fix_action: config_change,
+   symptoms: "OOMKilled, exit code 137, memory working set at limit, GC pressure",
+   root_cause: "Container memory limit below working set",
+   fix: "Raise memory limit to at least 1.5x observed peak working set; check for leaks if usage keeps growing."}
+- {id: RB-IMAGEPULL, service: "*", category: bad_image, fix_action: rollback,
+   symptoms: "ImagePullBackOff, ErrImagePull, manifest unknown, rollout stuck past progress deadline",
+   root_cause: "Image tag missing or registry auth failure",
+   fix: "kubectl rollout undo to the previous revision; verify the tag exists in the registry before redeploying."}
+- {id: RB-CI-REGRESSION, service: "*", category: code_regression, fix_action: pull_request,
+   symptoms: "Deterministic unit test assertion failure on main right after a code change",
+   root_cause: "Code regression",
+   fix: "Open a revert pull request for the offending commit; do not rerun (it will fail again)."}
+- {id: RB-CI-FLAKY, service: "*", category: flaky_test, fix_action: rerun_pipeline,
+   symptoms: "Intermittent timeouts or connection refused in tests, unrelated to the changed files",
+   root_cause: "Flaky test or runner",
+   fix: "Rerun the failed job once; if it fails again treat as a regression."}
+- {id: RB-STALE-CANARY, service: "*", category: stale_canary, fix_action: delete_resource,
+   symptoms: "Errors isolated to canary pods running an old version after routing change",
+   root_cause: "Stale canary deployment receiving traffic",
+   fix: "Delete the stale canary deployment and restore the subset selector."}
+- {id: RB-DEPENDENCY, service: "*", category: dependency_unavailable, fix_action: restart,
+   symptoms: "connection refused / Unavailable / DeadlineExceeded calling a downstream service",
+   root_cause: "Downstream dependency unhealthy",
+   fix: "Find the unhealthy dependency (pods, events); restart it if stuck; otherwise fix its root cause."}
+- {id: RB-CPU, service: "*", category: cpu_throttling, fix_action: config_change,
+   symptoms: "Latency up, CPU throttling high, no error spike",
+   root_cause: "CPU limit too low",
+   fix: "Raise CPU limit or enable HPA."}

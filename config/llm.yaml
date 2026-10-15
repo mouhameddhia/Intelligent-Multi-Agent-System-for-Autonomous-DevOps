@@ -1,0 +1,12 @@
+# LLM fallback chain. Providers are tried in order; a provider is skipped when its API key env var is unset.
+# All are OpenAI-compatible chat completion endpoints. If every provider fails (or MOCK_LLM=true),
+# the deterministic mock answers so the pipeline never blocks on an LLM.
+timeout_s: 20
+temperature: 0.1
+chain:
+  - {name: groq-llama3.3-70b, base_url: https://api.groq.com/openai/v1, model: llama-3.3-70b-versatile, api_key_env: GROQ_API_KEY}
+  - {name: groq-qwen3-32b, base_url: https://api.groq.com/openai/v1, model: qwen/qwen3-32b, api_key_env: GROQ_API_KEY}
+  - {name: openrouter-qwen2.5-72b, base_url: https://openrouter.ai/api/v1, model: qwen/qwen-2.5-72b-instruct, api_key_env: OPENROUTER_API_KEY}
+  - {name: openrouter-llama3.3-70b, base_url: https://openrouter.ai/api/v1, model: meta-llama/llama-3.3-70b-instruct, api_key_env: OPENROUTER_API_KEY}
+  # Offline option: a local Ollama server (no key needed, enable with OLLAMA_ENABLED=true)
+  - {name: ollama-qwen2.5-7b, base_url: http://localhost:11434/v1, model: "qwen2.5:7b-instruct", api_key_env: OLLAMA_ENABLED, local: true}
