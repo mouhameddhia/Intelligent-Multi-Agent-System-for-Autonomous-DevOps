@@ -110,6 +110,35 @@ function App() {
   async function investigateBuild(job) {
     const buildNumber = job.last_build?.number
     if (!jenkinsCredentials || !buildNumber) return
+    
+
+    const traceId =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `investigate-${Date.now()}`;
+
+    const traceStartedAt = performance.now();
+
+    const trace = (step, details = {}) => {
+      console.log("[INVESTIGATION_TRACE]", {
+        traceId,
+        step,
+        timestamp: new Date().toISOString(),
+        elapsedMs: Math.round(performance.now() - traceStartedAt),
+        ...details,
+      });
+    };
+
+    trace("investigation_started", {
+      jobName: job.name,
+      buildNumber,
+    });
+
+
+
+
+
+
 
     setIsInvestigating(true)
     setActiveInvestigationStage(0)
@@ -269,76 +298,363 @@ function App() {
         })),
       }
 
-      try {
-        const [githubOwner, githubRepoName] = (selectedGithubRepo || '').split('/')
-        const agentResponse = await fetch(`${AGENT_API_URL}/api/investigate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            job_name: job.name,
-            build_number: buildNumber,
-            evidence: agentEvidence,
-            github_token: githubToken || '',
-            github_owner: githubOwner || '',
-            github_repo: githubRepoName || '',
-          }),
-        })
+      
+      
+const debugId =
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `investigate-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
-        const agentData = await agentResponse.json()
-        if (!agentResponse.ok) {
-          throw new Error(
-            agentData.detail || `Agent API failed (HTTP ${agentResponse.status})`,
-          )
-        }
+const debugStartedAt = performance.now();
 
-        setActiveInvestigationStage(2)
-        setInvestigation((current) => {
-          if (
-            !current ||
-            current.jobName !== job.name ||
-            current.buildNumber !== buildNumber
-          ) return current
+const debugLog = (step, details = {}) => {
+  console.log(`[INVESTIGATION_TRACE] ${step}`, {
+    requestId: debugId,
+    timestamp: new Date().toISOString(),
+    elapsedMs: Math.round(performance.now() - debugStartedAt),
+    ...details,
+  });
+};
 
-          return {
-            ...current,
-            agentStatus: 'complete',
-            incidentId: agentData.incident_id,
-            decisionStatus: agentData.status,
-            agentReports: {
-              monitoring: agentData.monitoring_report,
-              diagnosis: agentData.diagnosis_report,
-              remediation: agentData.remediation_report,
-            },
-            agentError: '',
-          }
-        })
-      } catch (agentError) {
-        // Keep the evidence and show the agent failure in the final-report stage.
-        setActiveInvestigationStage(2)
-        setInvestigation((current) => {
-          if (
-            !current ||
-            current.jobName !== job.name ||
-            current.buildNumber !== buildNumber
-          ) return current
+let debugTimeoutId;
+let timeoutTriggered = false;
+let requestBody;
 
-          return {
-            ...current,
-            agentStatus: 'error',
-            agentError: agentError.message || 'Agent investigation failed.',
-          }
-        })
-      }
-    } catch (error) {
-      setActiveInvestigationStage(0)
-      setInvestigation({
-        jobName: job.name,
-        buildNumber,
-        error: error.message || 'Could not retrieve this build evidence.',
-      })
-    } finally {
-      setIsInvestigating(false)
+try {
+  debugLog("STEP 1: Investigation handler entered", {
+    jobName: job.name,
+    buildNumber,
+  });
+
+  // --------------------------------------------------
+  // STEP 2: Prepare payload
+  // --------------------------------------------------
+  const [githubOwner, githubRepoName] =
+    (selectedGithubRepo || "").split("/");
+
+  const payload = {
+    job_name: job.name,
+    build_number: buildNumber,
+    evidence: agentEvidence,
+    github_token: githubToken || "",
+    github_owner: githubOwner || "",
+    github_repo: githubRepoName || "",
+  };
+
+  debugLog("STEP 2: Payload prepared", {
+    jobName: job.name,
+    buildNumber,
+    evidenceType: typeof agentEvidence,
+    evidenceKeys:
+      agentEvidence &&
+      typeof agentEvidence === "object"
+        ? Object.keys(agentEvidence)
+        : [],
+    evidenceStringLength:
+      typeof agentEvidence === "string"
+        ? agentEvidence.length
+        : null,
+    hasGithubToken: Boolean(githubToken),
+    githubOwner: githubOwner || "(empty)",
+    githubRepo: githubRepoName || "(empty)",
+  });
+
+  // --------------------------------------------------
+  // STEP 3: Serialize payload and measure its size
+  // --------------------------------------------------
+  debugLog("STEP 3: Payload serialization started");
+
+  const serializationStartedAt = performance.now();
+
+  requestBody = JSON.stringify(payload);
+
+  const payloadBytes = new TextEncoder().encode(requestBody).length;
+
+  debugLog("STEP 3: Payload serialization completed", {
+    serializationMs: Math.round(
+      performance.now() - serializationStartedAt
+    ),
+    payloadBytes,
+    payloadCharacters: requestBody.length,
+  });
+
+  // --------------------------------------------------
+  // STEP 4: Start request and timeout
+  // --------------------------------------------------
+  const url = `${AGENT_API_URL}/api/investigate`;
+  const controller = new AbortController();
+
+  debugLog("STEP 4: Starting fetch", {
+    url,
+    timeoutMs: 90000,
+  });
+
+  debugTimeoutId = setTimeout(() => {
+    timeoutTriggered = true;
+
+    debugLog("TIMEOUT: 90 seconds elapsed; aborting frontend fetch", {
+      note:
+        "This does not guarantee cancellation of backend processing.",
+    });
+
+    controller.abort();
+  }, 90000);
+
+  // --------------------------------------------------
+  // STEP 5: Receive response headers
+  // --------------------------------------------------
+  let agentResponse;
+
+  try {
+    agentResponse = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Request-ID": debugId,
+      },
+      body: requestBody,
+      signal: controller.signal,
+    });
+
+    debugLog("STEP 5: Response headers received", {
+      status: agentResponse.status,
+      statusText: agentResponse.statusText,
+      ok: agentResponse.ok,
+      contentType: agentResponse.headers.get("content-type"),
+      serverRequestId:
+        agentResponse.headers.get("X-Request-ID"),
+    });
+  } catch (fetchError) {
+    debugLog("STEP 5 ERROR: Fetch failed before response headers", {
+      name: fetchError.name,
+      message: fetchError.message,
+      aborted: fetchError.name === "AbortError",
+      timeoutTriggered,
+    });
+
+    throw fetchError;
+  }
+
+  // Do not clear the timeout yet: reading the body can also hang.
+  // Keep the timeout active until response processing finishes.
+
+  // --------------------------------------------------
+  // STEP 6: Read response body
+  // --------------------------------------------------
+  debugLog("STEP 6: Reading response body started");
+
+  let responseText;
+
+  try {
+    responseText = await agentResponse.text();
+
+    debugLog("STEP 6: Response body received", {
+      bodyLength: responseText.length,
+      bodyPreview: responseText.slice(0, 1000),
+    });
+  } catch (bodyError) {
+    debugLog("STEP 6 ERROR: Failed to read response body", {
+      name: bodyError.name,
+      message: bodyError.message,
+      aborted: bodyError.name === "AbortError",
+      timeoutTriggered,
+    });
+
+    throw bodyError;
+  }
+
+  // --------------------------------------------------
+  // STEP 7: Parse JSON
+  // --------------------------------------------------
+  let agentData;
+
+  try {
+    debugLog("STEP 7: JSON parsing started");
+
+    agentData = responseText
+      ? JSON.parse(responseText)
+      : {};
+
+    debugLog("STEP 7: JSON parsing succeeded", {
+      responseKeys:
+        agentData && typeof agentData === "object"
+          ? Object.keys(agentData)
+          : [],
+    });
+  } catch (parseError) {
+    debugLog("STEP 7 ERROR: JSON parsing failed", {
+      name: parseError.name,
+      message: parseError.message,
+      httpStatus: agentResponse.status,
+    });
+
+    throw new Error(
+      `Agent API returned invalid JSON (HTTP ${agentResponse.status}): ` +
+        responseText.slice(0, 300)
+    );
+  }
+
+  // --------------------------------------------------
+  // STEP 8: Check HTTP status
+  // --------------------------------------------------
+  if (!agentResponse.ok) {
+    debugLog("STEP 8 ERROR: HTTP request returned an error", {
+      status: agentResponse.status,
+      detail: agentData.detail,
+    });
+
+    throw new Error(
+      agentData.detail ||
+        `Agent API failed (HTTP ${agentResponse.status})`
+    );
+  }
+
+  debugLog("STEP 8: Investigation response validated", {
+    incidentId: agentData.incident_id,
+    decisionStatus: agentData.status,
+    stepsCount: Array.isArray(agentData.steps)
+      ? agentData.steps.length
+      : 0,
+  });
+
+  // --------------------------------------------------
+  // STEP 9: Update investigation stage and state
+  // --------------------------------------------------
+  debugLog("STEP 9: Updating investigation stage");
+
+  setActiveInvestigationStage(2);
+
+  debugLog("STEP 9: Scheduling investigation state update");
+
+  setInvestigation((current) => {
+    if (
+      !current ||
+      current.jobName !== job.name ||
+      current.buildNumber !== buildNumber
+    ) {
+      debugLog("STEP 9: State update skipped; investigation mismatch", {
+        currentJobName: current?.jobName,
+        currentBuildNumber: current?.buildNumber,
+      });
+
+      return current;
     }
+
+    return {
+      ...current,
+      agentStatus: "complete",
+      incidentId: agentData.incident_id,
+      steps: agentData.steps || [],
+      decisionStatus: agentData.status,
+      agentReports: {
+        unified: agentData.unified_report,
+        monitoring: agentData.monitoring_report,
+        diagnosis: agentData.diagnosis_report,
+        remediation: agentData.remediation_report,
+        confidence: agentData.agent_confidence || {},
+        overallConfidence:
+          agentData.overall_confidence ?? null,
+        historicalIncident:
+          agentData.historical_incident ?? null,
+        proposedSteps: agentData.steps || [],
+      },
+      agentError: "",
+    };
+  });
+
+  debugLog("STEP 10: Investigation response processed successfully");
+} catch (agentError) {
+  debugLog("INVESTIGATION ERROR", {
+    name: agentError?.name,
+    message: agentError?.message,
+    stack: agentError?.stack,
+    aborted: agentError?.name === "AbortError",
+    timeoutTriggered,
+  });
+
+  setActiveInvestigationStage(2);
+
+  setInvestigation((current) => {
+    if (
+      !current ||
+      current.jobName !== job.name ||
+      current.buildNumber !== buildNumber
+    ) {
+      debugLog("ERROR STATE UPDATE SKIPPED: Investigation mismatch");
+      return current;
+    }
+
+    return {
+      ...current,
+      agentStatus: "error",
+      agentError:
+        agentError?.name === "AbortError" || timeoutTriggered
+          ? "Investigation request timed out or was aborted. Check backend logs."
+          : agentError?.message || "Agent investigation failed.",
+    };
+  });
+} finally {
+    clearTimeout(debugTimeoutId);
+
+    debugLog("STEP 11: Investigation handler finished", {
+      timeoutTriggered,
+      totalElapsedMs: Math.round(
+        performance.now() - debugStartedAt
+      ),
+    });
+  }
+
+  // This catch belongs to the OUTER try that retrieves Jenkins evidence
+  // and gathers GitHub/Prometheus data.
+  } catch (error) {
+    console.error("[INVESTIGATION_TRACE] Build evidence preparation failed", {
+      jobName: job.name,
+      buildNumber,
+      name: error?.name,
+      message: error?.message,
+      timestamp: new Date().toISOString(),
+    });
+
+    setActiveInvestigationStage(2);
+
+    setInvestigation((current) => {
+      if (!current) return current;
+
+      return {
+        ...current,
+        agentStatus: "error",
+        agentError:
+          error?.message || "Could not retrieve this build's evidence.",
+      };
+    });
+  } finally {
+    // Always release the loading state, including when Jenkins or
+    // Prometheus fails before the agent request starts.
+    setIsInvestigating(false);
+  }
+  } // End of investigateBuild()
+
+  async function submitFeedback(feedback) {
+
+    if (!investigation?.incidentId) return
+
+    const response = await fetch(
+      `${AGENT_API_URL}/api/incidents/${investigation.incidentId}/feedback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(feedback),
+      },
+    )
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.detail || `Feedback failed (HTTP ${response.status})`)
+    }
+    setInvestigation((current) => (current ? {
+      ...current,
+      feedbackOpen: false,
+      feedbackSaved: true,
+    } : current))
   }
 
   async function submitDecision(decision) {
@@ -362,12 +678,15 @@ function App() {
         decisionStatus: data.status,
         fixResult: data.fix_result,
         decisionMessage: data.message,
+        feedbackOpen: Boolean(data.fix_result?.applied),
       } : current))
     } catch (error) {
       setInvestigation((current) => (current ? {
         ...current,
         isDeciding: false,
-        decisionMessage: error.message || 'Could not submit the decision.',
+        decisionMessage: error instanceof TypeError
+          ? 'Cannot reach the PipeGuard backend. Check that it is running on port 8000.'
+          : (error.message || 'Could not submit the decision.'),
       } : current))
     }
   }
@@ -1178,6 +1497,16 @@ function App() {
         </button>
       )}
 
+      {investigation?.feedbackOpen && (
+        <FixFeedbackModal
+          investigation={investigation}
+          onClose={() => setInvestigation((current) => (
+            current ? { ...current, feedbackOpen: false } : current
+          ))}
+          onSubmit={submitFeedback}
+        />
+      )}
+
       {isInvestigationModalOpen && investigation && (
         <div
           className="modal-backdrop investigation-modal-backdrop"
@@ -1222,6 +1551,9 @@ function App() {
                 activeStage={activeInvestigationStage}
                 onStageChange={setActiveInvestigationStage}
                 onDecision={submitDecision}
+                onOpenFeedback={() => setInvestigation((current) => (
+                  current ? { ...current, feedbackOpen: true } : current
+                ))}
               />
             </div>
           </section>
@@ -1448,7 +1780,7 @@ function getPrometheusMetricPreview(metric) {
   return JSON.stringify(preview, null, 2)
 }
 
-function BuildInvestigation({ investigation, isLoading, activeStage, onStageChange, onDecision }) {
+function BuildInvestigation({ investigation, isLoading, activeStage, onStageChange, onDecision, onOpenFeedback }) {
   const [hiddenMetricQueries, setHiddenMetricQueries] = useState([])
 
   if (!investigation) return null
@@ -1758,127 +2090,447 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
           )}
 
           {activeStage === 2 && investigation.agentReports && (
-            <div className="agent-report-list">
-              <div className="agent-report-list-heading">
+            <div className="pg-report">
+              <header className="pg-report-header">
                 <div>
-                  <div className="eyebrow">INVESTIGATION OUTPUT</div>
-                  <h4>Analysis and recommended actions</h4>
+                  <div className="eyebrow">INCIDENT INVESTIGATION</div>
+                  <h3>{investigation.jobName} <span>#{investigation.buildNumber}</span></h3>
+                  <p>Evidence, likely cause, and proposed actions for your review.</p>
                 </div>
-                <span className="agent-report-count">3 reports</span>
-              </div>
+                <span className="pg-report-status">
+                  {investigation.decisionStatus === 'approved_fixed'
+                    ? (investigation.fixResult?.applied ? 'Fix applied' : 'Fix attempted')
+                    : investigation.decisionStatus === 'denied'
+                      ? 'Approval denied'
+                      : investigation.decisionStatus === 'awaiting_approval'
+                        ? 'Awaiting approval'
+                        : 'Report ready'}
+                </span>
+              </header>
 
-              <details className="investigation-section agent-report-card">
-                <summary>
-                  <span className="agent-report-index">01</span>
-                  <span className="agent-report-summary-copy">
-                    <strong>Monitoring report</strong>
-                    <small>Build signals, collected evidence, and system observations</small>
-                  </span>
-                  <span className="agent-report-chevron">⌄</span>
-                </summary>
-                <div className="agent-report-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {investigation.agentReports.monitoring || 'No monitoring report returned.'}
-                  </ReactMarkdown>
-                </div>
-              </details>
+              {(() => {
+                const reports = investigation.agentReports
+                const confidence = reports.confidence || {}
+                const score = (key) => {
+                  const value = confidence[key] ?? confidence[key[0].toUpperCase() + key.slice(1)]
+                  return typeof value === 'number' && Number.isFinite(value)
+                    ? `${value}%`
+                    : 'N/A'
+                }
+                const steps = reports.proposedSteps || investigation.steps || []
+                const historical = reports.historicalIncident
+                const hasReport = (value) => typeof value === 'string' && value.trim().length > 0
+                const extractField = (report, aliases) => {
+                  const lines = (report || '').split(/\r?\n/)
+                  const normalize = (line) => line.replace(/[*_`#>]/g, '').trim()
+                  const idx = lines.findIndex((line) => {
+                    const clean = normalize(line).toLowerCase()
+                    return aliases.some((alias) => clean.toLowerCase().startsWith(alias.toLowerCase()))
+                  })
+                  if (idx < 0) return ''
+                  const first = normalize(lines[idx])
+                  const alias = aliases.find((item) => first.toLowerCase().startsWith(item.toLowerCase()))
+                  const tail = first.slice(alias.length).replace(/^\s*:\s*/, '').trim()
+                  const out = tail ? [tail] : []
+                  for (let k = idx + 1; k < lines.length; k++) {
+                    const raw = lines[k]
+                    const clean = normalize(raw)
+                    if (/^#{1,6}\s+/.test(raw) || /^\*\*[^*]+\*\*\s*:/.test(raw)) break
+                    if (aliases.some((item) => clean.toLowerCase().startsWith(item.toLowerCase()))) break
+                    if (clean) out.push(clean)
+                    else if (out.length) break
+                  }
+                  return out.join('\n').trim()
+                }
 
-              <details className="investigation-section agent-report-card" open>
-                <summary>
-                  <span className="agent-report-index">02</span>
-                  <span className="agent-report-summary-copy">
-                    <strong>Diagnosis report</strong>
-                    <small>Failure analysis and evidence supporting the likely cause</small>
-                  </span>
-                  <span className="agent-report-chevron">⌄</span>
-                </summary>
-                <div className="agent-report-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {investigation.agentReports.diagnosis || 'No diagnosis report returned.'}
-                  </ReactMarkdown>
-                </div>
-              </details>
+                return (
+                  <>
+                    <section className="pg-confidence-panel" aria-label="Agent confidence">
+                      <div className="pg-section-heading">
+                        <div>
+                          <h4>Confidence</h4>
+                          <p>Scores returned by the investigation agents</p>
+                        </div>
+                      </div>
+                      <div className="pg-confidence-grid">
+                        {[
+                          ['Monitoring', score('monitoring')],
+                          ['Diagnosis', score('diagnosis')],
+                          ['Remediation', score('remediation')],
+                          ['Overall', typeof reports.overallConfidence === 'number'
+                            ? `${reports.overallConfidence}%`
+                            : 'N/A'],
+                        ].map(([label, value]) => (
+                          <div className={`pg-confidence-card ${label === 'Overall' ? 'is-overall' : ''}`} key={label}>
+                            <span>{label}</span>
+                            <strong>{value}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
 
-              <details className="investigation-section agent-report-card" open>
-                <summary>
-                  <span className="agent-report-index">03</span>
-                  <span className="agent-report-summary-copy">
-                    <strong>Remediation proposal</strong>
-                    <small>Suggested next steps for an engineer to review</small>
-                  </span>
-                  <span className="agent-report-chevron">⌄</span>
-                </summary>
-                <div className="agent-remediation-notice">
-                  <span aria-hidden="true">!</span>
-                  <p>
-                    Review the proposal and validate its impact before applying
-                    changes. PipeGuard does not execute these recommendations automatically.
-                  </p>
-                </div>
-                <div className="agent-report-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {investigation.agentReports.remediation || 'No remediation proposal returned.'}
-                  </ReactMarkdown>
-                </div>
-              </details>
+                    <section className="pg-report-panel pg-monitoring-panel">
+                      <div className="pg-panel-kicker">01 · OBSERVABILITY</div>
+                      <h4>Monitoring</h4>
+                      {hasReport(reports.monitoring) ? (
+                        <div className="pg-summary-fields">
+                          {[
+                            ['Failed stage', ['Failed stage', 'Failed build stage', 'Failing stage']],
+                            ['Exact error', ['Exact error', 'Console error', 'Error']],
+                            ['System health', ['System health', 'Infrastructure health', 'System metrics']],
+                            ['Conclusion', ['Conclusion', 'Monitoring conclusion']],
+                          ].map(([label, aliases]) => {
+                            const value = extractField(reports.monitoring, aliases)
+                            return (
+                              <div className="pg-summary-field" key={label}>
+                                <strong>{label}</strong>
+                                {value ? (
+                                  <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown></div>
+                                ) : <p className="pg-empty-state">Not explicitly reported.</p>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : <p className="pg-empty-state">No separate monitoring report was returned.</p>}
+                    </section>
 
-                {investigation.decisionStatus === 'awaiting_approval' && (
-                  <div className="approval-actions">
-                    <p>
-                      Approve to let PipeGuard fetch the responsible file, fix it,
-                      and push the commit to GitHub. Deny to handle it yourself.
-                    </p>
-                    <div className="approval-buttons">
-                      <button
-                        className="approve-button"
-                        onClick={() => onDecision('approve')}
-                        disabled={investigation.isDeciding}
-                      >
-                        {investigation.isDeciding ? 'Applying…' : '✓ Approve & fix'}
-                      </button>
-                      <button
-                        className="deny-button"
-                        onClick={() => onDecision('deny')}
-                        disabled={investigation.isDeciding}
-                      >
-                        ✕ Deny
+                    <section className="pg-report-panel pg-diagnosis-panel">
+                      <div className="pg-panel-kicker">02 · ROOT CAUSE</div>
+                      <h4>Diagnosis</h4>
+                      {hasReport(reports.diagnosis) ? (
+                        <div className="pg-summary-fields">
+                          {[
+                            ['Root cause', ['Root cause', 'Primary root cause', 'Likely root cause']],
+                            ['Conclusion', ['Conclusion', 'Diagnosis conclusion']],
+                          ].map(([label, aliases]) => {
+                            const value = extractField(reports.diagnosis, aliases)
+                            return (
+                              <div className="pg-summary-field" key={label}>
+                                <strong>{label}</strong>
+                                {value ? (
+                                  <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown></div>
+                                ) : <p className="pg-empty-state">Not explicitly reported.</p>}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : <p className="pg-empty-state">No separate diagnosis report was returned.</p>}
+                    </section>
+
+                    <section className="pg-report-panel pg-remediation-panel">
+                      <div className="pg-panel-kicker">03 · PROPOSED RESPONSE</div>
+                      <h4>Remediation</h4>
+                      {steps.length > 0 ? (
+                        <ol className="pg-proposed-steps">
+                          {steps.map((step, index) => (
+                            <li key={step.id ?? `${step.order_shown ?? index}-${index}`}>
+                              <span className="pg-step-number">{step.order_shown ?? index + 1}</span>
+                              <div className="pg-step-body">
+                                <p>{step.text || step.description || step.action || 'Step details unavailable.'}</p>
+                                {step.disruptive && <span className="pg-disruptive-tag">Potentially disruptive</span>}
+                              </div>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : hasReport(reports.remediation) ? (
+                        <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{reports.remediation}</ReactMarkdown></div>
+                      ) : <p className="pg-empty-state">No remediation steps were returned.</p>}
+                    </section>
+
+                    {hasReport(reports.unified) && (
+                      <details className="pg-raw-report">
+                        <summary>View full investigation report</summary>
+                        <div className="agent-report-markdown">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{reports.unified}</ReactMarkdown>
+                        </div>
+                      </details>
+                    )}
+                  </>
+                )
+              })()}
+
+              {investigation.decisionStatus === 'awaiting_approval' && (
+                <div className="pg-approval-panel">
+                  <div>
+                    <h4>Ready to proceed?</h4>
+                    <p>Approving allows PipeGuard to fetch the responsible file, apply the proposed fix, and push a commit to GitHub. Denying leaves the fix unapplied.</p>
+                  </div>
+                  {investigation.decisionMessage && (
+                    <div className="decision-result decision-error" role="alert">
+                      <strong>Could not submit the decision.</strong>{' '}
+                      {investigation.decisionMessage}
+                    </div>
+                  )}
+                  <div className="approval-buttons">
+                    <button
+                      className="approve-button"
+                      onClick={() => onDecision('approve')}
+                      disabled={investigation.isDeciding}
+                    >
+                      {investigation.isDeciding ? 'Applying…' : '✓ Approve & fix'}
+                    </button>
+                    <button
+                      className="deny-button"
+                      onClick={() => onDecision('deny')}
+                      disabled={investigation.isDeciding}
+                    >
+                      ✕ Deny
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {investigation.decisionStatus === 'denied' && (
+                <div className="decision-result decision-denied pg-decision-panel">
+                  <strong>Approval denied.</strong>{' '}
+                  {investigation.decisionMessage || 'No automated changes were made.'}
+                  {investigation.feedbackSaved ? (
+                    <div className="decision-feedback-saved">✓ Resolution saved. Thank you.</div>
+                  ) : (
+                    <div>
+                      <button className="secondary-button feedback-reopen-button" onClick={onOpenFeedback}>
+                        Report how you resolved it
                       </button>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+              )}
 
-                {investigation.decisionStatus === 'denied' && (
-                  <div className="decision-result decision-denied">
-                    <strong>Denied.</strong>{' '}
-                    {investigation.decisionMessage || 'No changes were made.'}
-                  </div>
-                )}
-
-                {investigation.decisionStatus === 'approved_fixed' && (
-                  <div className={`decision-result ${
-                    investigation.fixResult?.applied ? 'decision-approved' : 'decision-error'
-                  }`}>
-                    {investigation.fixResult?.applied ? (
-                      <>
-                        <strong>Fix applied.</strong> {investigation.decisionMessage}{' '}
-                        {investigation.fixResult.commit_url && (
-                          <a href={investigation.fixResult.commit_url} target="_blank" rel="noreferrer">
-                            View commit ↗
-                          </a>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <strong>Could not apply the fix.</strong> {investigation.decisionMessage}
-                      </>
-                    )}
-                  </div>
-                )}
+              {investigation.decisionStatus === 'approved_fixed' && (
+                <div className={`decision-result pg-decision-panel ${
+                  investigation.fixResult?.applied ? 'decision-approved' : 'decision-error'
+                }`}>
+                  {investigation.fixResult?.applied ? (
+                    <>
+                      <strong>Fix applied.</strong> {investigation.decisionMessage}{' '}
+                      {investigation.fixResult.commit_url && (
+                        <a href={investigation.fixResult.commit_url} target="_blank" rel="noreferrer">
+                          View commit ↗
+                        </a>
+                      )}
+                      {investigation.feedbackSaved ? (
+                        <div className="decision-feedback-saved">✓ Feedback saved. Thank you.</div>
+                      ) : (
+                        <div>
+                          <button className="secondary-button feedback-reopen-button" onClick={onOpenFeedback}>
+                            Give feedback on this fix
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <strong>Could not apply the fix.</strong> {investigation.decisionMessage}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>
       )}
     </section>
+  )
+}
+
+
+function FixFeedbackModal({ investigation, onClose, onSubmit }) {
+  const isManual = investigation.decisionStatus === 'denied'
+  const steps = investigation.steps || []
+  const [buildPassed, setBuildPassed] = useState(false)
+  const [likedFix, setLikedFix] = useState(false)
+  const [systemEfficient, setSystemEfficient] = useState(false)
+  const [comment, setComment] = useState('')
+  const [followedSteps, setFollowedSteps] = useState({})
+  const [solvedStepId, setSolvedStepId] = useState('')
+  const [customSolution, setCustomSolution] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  async function handleSubmit() {
+    setIsSaving(true)
+    setSaveError('')
+    try {
+      await onSubmit({
+        build_passed: buildPassed,
+        liked_fix: likedFix,
+        system_efficient: systemEfficient,
+        comment,
+        resolution_path: isManual ? 'manual' : 'auto_fix',
+        followed_steps: isManual ? followedSteps : {},
+        solved_step_id: isManual ? (solvedStepId || null) : null,
+        custom_solution: isManual ? customSolution : '',
+      })
+    } catch (error) {
+      setSaveError(error.message || 'Could not save your feedback.')
+      setIsSaving(false)
+    }
+  }
+
+  const commitUrl = investigation.fixResult?.commit_url
+
+  return (
+    <div
+      className="modal-backdrop feedback-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isSaving) onClose()
+      }}
+    >
+      <section
+        className="configuration-modal feedback-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedback-modal-title"
+      >
+        <div className="modal-header">
+          <div className="feedback-success-mark" aria-hidden="true">{isManual ? '✎' : '✓'}</div>
+          <button
+            className="modal-close"
+            onClick={onClose}
+            disabled={isSaving}
+            aria-label="Close"
+          >×</button>
+        </div>
+
+        <div className="modal-eyebrow">
+          {isManual ? 'PIPEGUARD · RESOLVED BY YOU' : 'PIPEGUARD · FIX APPLIED'}
+        </div>
+        <h2 id="feedback-modal-title">
+          {isManual ? 'How did you resolve it?' : 'Fix pushed to GitHub'}
+        </h2>
+        <p className="modal-description">
+          {isManual ? (
+            'You handled this yourself. Tell PipeGuard what happened with each proposed step so it can learn what works for you.'
+          ) : (
+            <>
+              {investigation.decisionMessage || 'PipeGuard pushed a fix.'}{' '}
+              {commitUrl && (
+                <a href={commitUrl} target="_blank" rel="noreferrer">View commit ↗</a>
+              )}
+            </>
+          )}
+        </p>
+
+        {isManual && steps.length === 0 && (
+          <p className="modal-description">
+            No structured steps were stored for this incident. Describe what you did below.
+          </p>
+        )}
+
+        {isManual && steps.length > 0 && (
+          <>
+            <div className="feedback-question">
+              Which of these did you actually follow? Tick everything you did —
+              even steps that did not end up fixing it. This tells PipeGuard
+              your real process, not just the final answer.
+            </div>
+            <div className="step-outcome-list">
+              {steps.map((step) => (
+                <label key={step.id} className="step-checklist-row">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(followedSteps[step.id])}
+                    onChange={(event) => {
+                      const checked = event.target.checked
+                      setFollowedSteps((current) => ({ ...current, [step.id]: checked }))
+                      if (!checked && solvedStepId === step.id) setSolvedStepId('')
+                    }}
+                  />
+                  <span className="step-outcome-text">
+                    <strong>{step.order_shown}.</strong> {step.text}
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            {Object.values(followedSteps).some(Boolean) && (
+              <label className="form-field solved-step-field">
+                <span>Which one actually fixed it?</span>
+                <select
+                  value={solvedStepId}
+                  onChange={(event) => setSolvedStepId(event.target.value)}
+                >
+                  <option value="">None of these — I used something else</option>
+                  {steps
+                    .filter((step) => followedSteps[step.id])
+                    .map((step) => (
+                      <option key={step.id} value={step.id}>
+                        {step.order_shown}. {step.text.slice(0, 80)}{step.text.length > 80 ? '…' : ''}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
+          </>
+        )}
+
+        {isManual && (
+          <label className="form-field feedback-comment">
+            <span>Your own solution (optional)</span>
+            <textarea
+              rows={3}
+              value={customSolution}
+              onChange={(event) => setCustomSolution(event.target.value)}
+              placeholder="What did you do that was not in the proposed steps?"
+            />
+          </label>
+        )}
+
+        <div className="feedback-question">After rebuilding in Jenkins, how did it go?</div>
+
+        <label className="feedback-check">
+          <input
+            type="checkbox"
+            checked={buildPassed}
+            onChange={(event) => setBuildPassed(event.target.checked)}
+          />
+          <span>The Jenkins build now passes</span>
+        </label>
+        <label className="feedback-check">
+          <input
+            type="checkbox"
+            checked={likedFix}
+            onChange={(event) => setLikedFix(event.target.checked)}
+          />
+          <span>
+            {isManual
+              ? 'The proposed steps were useful'
+              : 'I am happy with the fix PipeGuard made'}
+          </span>
+        </label>
+        <label className="feedback-check">
+          <input
+            type="checkbox"
+            checked={systemEfficient}
+            onChange={(event) => setSystemEfficient(event.target.checked)}
+          />
+          <span>PipeGuard was efficient on this incident</span>
+        </label>
+
+        <label className="form-field feedback-comment">
+          <span>Comments (optional)</span>
+          <textarea
+            rows={3}
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+            placeholder={isManual
+              ? 'What did you actually do? Anything the steps missed?'
+              : 'Anything we should know about this fix?'}
+          />
+        </label>
+
+        {saveError && <div className="feedback-error" role="alert">{saveError}</div>}
+
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onClose} disabled={isSaving}>
+            Later
+          </button>
+          <button className="primary-button" onClick={handleSubmit} disabled={isSaving}>
+            {isSaving ? 'Saving…' : 'Submit feedback'}
+          </button>
+        </div>
+      </section>
+    </div>
   )
 }
 

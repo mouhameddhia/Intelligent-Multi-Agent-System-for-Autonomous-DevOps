@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 me.txt
+*.bak
 # Python
 .venv/
 venv/

@@ -11,6 +11,7 @@ app = FastAPI(
     version="0.2.0",
 )
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -19,8 +20,13 @@ app.add_middleware(
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "X-Request-ID",
+    ],
 )
+
 
 app.include_router(jenkins_router)
 

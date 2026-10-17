@@ -4,6 +4,7 @@ from langchain_groq import ChatGroq
 from langchain.agents import create_agent
 
 from .evidence_utils import compact_evidence
+from .confidence import extract_agent_confidence
 from ..config import settings
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_diagnosis_tools
@@ -12,18 +13,13 @@ SYSTEM_PROMPT = """\
 You are a Diagnosis Agent in a DevOps investigation pipeline.
 
 You receive a Monitoring Report describing what failed in a Jenkins build.
-Your role is to find out WHY it failed using both live and historical data.
-You have access to three tools:
-- get_recent_commits   : returns the latest code changes pushed before the failure
-- get_build_history    : returns the last several build results to identify patterns
-- get_failure_patterns : returns known recurring failure types and their common causes
+Your role is to find out WHY it failed using only the current Monitoring Report and supplied live provider evidence. You have no access to historical incidents, past fixes, or memory.
 
-Use all three tools, then write a structured Diagnosis Report that includes:
+Write a structured Diagnosis Report that includes:
 1. Root cause: the most likely reason for the failure (specific commit, file, or pattern)
-2. Evidence: which data points support this conclusion (commit SHA, files changed, history)
-3. Contributing factors: any recurring patterns or historical context that matters
-4. Confidence level: high / medium / low with a brief justification
-5. What to rule out: anything that looks suspicious but is NOT the cause
+2. Conclusion: one concise sentence summarizing the likely cause and its impact
+3. Evidence: which data points support this conclusion (commit SHA, files changed, history)
+4. End with AGENT_CONFIDENCE: NN (integer 0-100), estimating how strongly current evidence supports the root-cause conclusion. Do not create a separate confidence section.
 """
 
 
@@ -32,7 +28,7 @@ def run_diagnosis(state: InvestigationState) -> InvestigationState:
         model=settings.llm_model,
         api_key=settings.groq_api_key,
         temperature=0,
-        max_tokens=1200,
+        max_tokens=1600,
         model_kwargs={"include_reasoning": False},
     )
 
@@ -48,11 +44,17 @@ Rules:
 - The GitHub commit is relevant only if the supplied lookup matched the build SHA.
 - A changed file is a lead, not proof that it caused the failure.
 - Do not invent commit details, build history, or failure patterns.
-- State when historical build data is unavailable; do not infer trends.
-- Explain confidence based on actual evidence.
-- If evidence is insufficient, leave the root cause unconfirmed.
-- Return a complete, concise report with root cause, evidence,
-  contributing factors, confidence, and what to rule out.
+- Do not use, request, infer, or refer to historical incidents or past fixes.
+
+FORMAT RULES:
+- Write a thorough analysis in markdown with these sections:
+  **Root cause** (be specific: file, function, commit, and the mechanism that makes
+  the test fail),
+  **Conclusion** (one concise sentence summarizing the likely cause and its impact),
+  **Evidence** (each point tied to concrete current signals: console error, matching commit evidence and diff statistics, or measured metrics),
+  End with one machine-readable line: AGENT_CONFIDENCE: NN (integer 0-100). Do not create separate sections titled Ruled out, Contributing factors, or Confidence.
+- Build on the Monitoring Report: refer to its findings instead of copying them word
+  for word, but do not omit any reasoning that supports the root cause.
 """
         message = (
             f"Investigate Jenkins job {state['job_name']} build "
@@ -67,17 +69,16 @@ Rules:
         ])
         report = result.content
     else:
-        # Compatibility path for the teammate's original standalone demo.
-        tools = make_diagnosis_tools()
-        agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
+        # Legacy path is LLM-only: no historical tools or memory.
         message = (
             f"Monitoring Report:\n{state['monitoring_report']}\n\n"
-            f"Diagnose the root cause for Jenkins job: {state['job_name']}, "
-            f"build #{state['build_number']}"
+            f"Diagnose the current failure for Jenkins job: {state['job_name']}, build #{state['build_number']}. Use only current supplied evidence."
         )
-        result = agent.invoke({
-            "messages": [{"role": "user", "content": message}]
-        })
-        report = result["messages"][-1].content
+        result = llm.invoke([
+            ("system", SYSTEM_PROMPT + "\nDo not access historical incidents or memory."),
+            ("human", message),
+        ])
+        report = result.content
 
-    return {**state, "diagnosis_report": report}
+    report, confidence = extract_agent_confidence(report)
+    return {**state, "diagnosis_report": report, "diagnosis_confidence": confidence}

@@ -68,7 +68,41 @@ def _list_repo_root_files(owner: str, repo: str, token: str) -> list[str]:
         return []
 
 
-def _fetch_file_content(owner: str, repo: str, token: str, path: str) -> str | None:
+def _explain_http_error(exc: Exception, owner: str, repo: str, path: str = "") -> str:
+    """Turn a GitHub/httpx failure into one sentence an engineer can act on."""
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    target = f"{owner}/{repo}" + (f" ({path})" if path else "")
+    if code == 401:
+        return (
+            "GitHub rejected the token (401): it is revoked, expired or mistyped. "
+            "Reconnect GitHub with a new token."
+        )
+    if code == 403:
+        return (
+            f"GitHub refused access to {target} (403): the token needs "
+            "'Contents: Read and write' on this repository, or the API rate limit was reached."
+        )
+    if code == 404:
+        return (
+            f"GitHub returned 404 for {target}: the file does not exist at that path, "
+            "or the token cannot see this repository."
+        )
+    if code in (409, 422):
+        return (
+            f"GitHub rejected the commit ({code}): the file changed on GitHub after "
+            "PipeGuard read it. Run the investigation again."
+        )
+    if code:
+        return f"GitHub returned HTTP {code} for {target}."
+    return f"Could not reach GitHub for {target}: {exc}"
+
+
+def _is_auth_problem(reason: str) -> bool:
+    return reason.startswith(("GitHub rejected the token", "GitHub refused access"))
+
+
+def _try_fetch(owner: str, repo: str, token: str, path: str):
+    """Return (content, None) on success or (None, reason) on failure."""
     try:
         resp = httpx.get(
             f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}",
@@ -77,9 +111,39 @@ def _fetch_file_content(owner: str, repo: str, token: str, path: str) -> str | N
         )
         resp.raise_for_status()
         data = resp.json()
-        return base64.b64decode(data["content"]).decode("utf-8")
-    except Exception:
-        return None
+        if not isinstance(data, dict) or "content" not in data:
+            return None, f"{path} is not a file in {owner}/{repo}."
+        return base64.b64decode(data["content"]).decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, f"{path} is not a UTF-8 text file."
+    except Exception as exc:
+        return None, _explain_http_error(exc, owner, repo, path)
+
+
+def _fetch_file_content(owner: str, repo: str, token: str, path: str) -> str | None:
+    return _try_fetch(owner, repo, token, path)[0]
+
+
+def _resolve_repo_path(path: str, owner: str, repo: str, token: str, trace: list):
+    """Map a path quoted in a log or an LLM report to a path that exists in the repo.
+
+    Jenkins logs and LLM reports quote paths such as
+    /var/lib/jenkins/workspace/PipeGuard-Lab/app.py. GitHub only knows paths
+    relative to the repository root, so drop leading folders one at a time and
+    return (repo_relative_path, content) for the first one GitHub finds."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    last_reason = ""
+    for i in range(len(parts)):
+        candidate = "/".join(parts[i:])
+        content, reason = _try_fetch(owner, repo, token, candidate)
+        if content is not None:
+            return candidate, content
+        last_reason = reason or ""
+        if _is_auth_problem(last_reason):
+            break  # a bad token cannot be fixed by trying other paths
+    if last_reason:
+        trace.append(last_reason)
+    return None, None
 
 
 def _parse_local_imports(source_code: str) -> list[str]:
@@ -104,7 +168,9 @@ def _find_test_filename_from_text(text: str) -> str | None:
     return None
 
 
-def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: str) -> str | None:
+def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: str, trace=None) -> str | None:
+    trace = trace if trace is not None else []
+    can_verify = bool(token and owner and repo)
     evidence = state.get("evidence") or {}
 
     console_log = ""
@@ -121,17 +187,24 @@ def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: s
         for path in _extract_paths_from_text(source_text):
             if not _is_plausible_source_file(path):
                 continue
-            if "test" in path.lower():
+            # Judge the file name only: folders such as /tests/ or a workspace
+            # name must not turn a source file into a "test" file.
+            if "test" in path.split("/")[-1].lower():
                 test_paths.append(path)
                 continue
             candidates[path] = candidates.get(path, 0) + 1
 
     if candidates:
-        return max(candidates, key=candidates.get)
+        if not can_verify:
+            return max(candidates, key=candidates.get)
+        # Most-mentioned first; use the first path that really exists in the repo.
+        for path in sorted(candidates, key=candidates.get, reverse=True):
+            resolved, _content = _resolve_repo_path(path, owner, repo, token, trace)
+            if resolved:
+                return resolved
 
-    if test_paths and token and owner and repo:
-        test_filename = test_paths[0].split("/")[-1]
-        test_content = _fetch_file_content(owner, repo, token, test_filename)
+    if test_paths and can_verify:
+        test_path, test_content = _resolve_repo_path(test_paths[0], owner, repo, token, trace)
         if test_content:
             local_modules = _parse_local_imports(test_content)
             root_files = _list_repo_root_files(owner, repo, token)
@@ -146,7 +219,7 @@ def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: s
             if len(root_py_files) == 1:
                 return next(iter(root_py_files.values()))
 
-    if token and owner and repo:
+    if can_verify:
         root_files = _list_repo_root_files(owner, repo, token)
         root_py_files = [
             f for f in root_files
@@ -176,11 +249,15 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
             "message": "Missing GitHub token/owner/repo — cannot apply a real fix.",
         }}
 
-    target_file = _pick_target_file(state, token, owner, repo)
+    trace: list[str] = []
+    target_file = _pick_target_file(state, token, owner, repo, trace)
     if not target_file:
         return {**state, "fix_result": {
             "applied": False,
-            "message": "Could not determine which file is responsible from the evidence.",
+            "message": (
+                "Could not determine which file is responsible from the evidence. "
+                + " ".join(dict.fromkeys(trace))
+            ).strip(),
         }}
 
     headers = _headers(token)
@@ -198,7 +275,7 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
     except Exception as exc:
         return {**state, "fix_result": {
             "applied": False,
-            "message": f"Could not fetch {target_file} from GitHub: {exc}",
+            "message": f"Could not fetch {target_file}. {_explain_http_error(exc, owner, repo, target_file)}",
         }}
 
     # Fetch the associated test file so the LLM sees ALL assertions, not just
@@ -295,7 +372,7 @@ no explanation, no commentary.
     except Exception as exc:
         return {**state, "fix_result": {
             "applied": False,
-            "message": f"Generated a fix but could not push it to GitHub: {exc}",
+            "message": f"Generated a fix but could not push it. {_explain_http_error(exc, owner, repo, target_file)}",
         }}
 
     return {**state, "fix_result": {
