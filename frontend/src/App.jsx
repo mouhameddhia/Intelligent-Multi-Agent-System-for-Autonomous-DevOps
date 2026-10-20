@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { extractSection } from './reportSections'
 import './App.css'
 
 const API_URL = 'http://127.0.0.1:8000';
@@ -552,6 +553,7 @@ try {
         diagnosis: agentData.diagnosis_report,
         remediation: agentData.remediation_report,
         confidence: agentData.agent_confidence || {},
+        confidenceSource: agentData.confidence_source || {},
         overallConfidence:
           agentData.overall_confidence ?? null,
         historicalIncident:
@@ -2120,28 +2122,9 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                 const steps = reports.proposedSteps || investigation.steps || []
                 const historical = reports.historicalIncident
                 const hasReport = (value) => typeof value === 'string' && value.trim().length > 0
-                const extractField = (report, aliases) => {
-                  const lines = (report || '').split(/\r?\n/)
-                  const normalize = (line) => line.replace(/[*_`#>]/g, '').trim()
-                  const idx = lines.findIndex((line) => {
-                    const clean = normalize(line).toLowerCase()
-                    return aliases.some((alias) => clean.toLowerCase().startsWith(alias.toLowerCase()))
-                  })
-                  if (idx < 0) return ''
-                  const first = normalize(lines[idx])
-                  const alias = aliases.find((item) => first.toLowerCase().startsWith(item.toLowerCase()))
-                  const tail = first.slice(alias.length).replace(/^\s*:\s*/, '').trim()
-                  const out = tail ? [tail] : []
-                  for (let k = idx + 1; k < lines.length; k++) {
-                    const raw = lines[k]
-                    const clean = normalize(raw)
-                    if (/^#{1,6}\s+/.test(raw) || /^\*\*[^*]+\*\*\s*:/.test(raw)) break
-                    if (aliases.some((item) => clean.toLowerCase().startsWith(item.toLowerCase()))) break
-                    if (clean) out.push(clean)
-                    else if (out.length) break
-                  }
-                  return out.join('\n').trim()
-                }
+                const hist = (camel, snake) => historical?.[camel] ?? historical?.[snake]
+                
+                
 
                 return (
                   <>
@@ -2161,7 +2144,15 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                             ? `${reports.overallConfidence}%`
                             : 'N/A'],
                         ].map(([label, value]) => (
-                          <div className={`pg-confidence-card ${label === 'Overall' ? 'is-overall' : ''}`} key={label}>
+                          <div
+                            className={`pg-confidence-card ${label === 'Overall' ? 'is-overall' : ''}`}
+                            key={label}
+                            title={label === 'Monitoring' && reports.confidenceSource?.monitoring === 'evidence_coverage'
+                              ? 'Computed from evidence coverage: the agent did not return a score.'
+                              : label === 'Overall'
+                                ? 'Mean of the scores that are available.'
+                                : undefined}
+                          >
                             <span>{label}</span>
                             <strong>{value}</strong>
                           </div>
@@ -2172,26 +2163,31 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                     <section className="pg-report-panel pg-monitoring-panel">
                       <div className="pg-panel-kicker">01 · OBSERVABILITY</div>
                       <h4>Monitoring</h4>
-                      {hasReport(reports.monitoring) ? (
-                        <div className="pg-summary-fields">
-                          {[
-                            ['Failed stage', ['Failed stage', 'Failed build stage', 'Failing stage']],
-                            ['Exact error', ['Exact error', 'Console error', 'Error']],
-                            ['System health', ['System health', 'Infrastructure health', 'System metrics']],
-                            ['Conclusion', ['Conclusion', 'Monitoring conclusion']],
-                          ].map(([label, aliases]) => {
-                            const value = extractField(reports.monitoring, aliases)
-                            return (
+                      {hasReport(reports.monitoring) ? (() => {
+                        const fields = [
+                          ['Build summary', ['Build summary']],
+                          ['Failed stage', ['Failed stage', 'Failed build stage', 'Failing stage']],
+                          ['Exact error', ['Exact error', 'Console error', 'Error']],
+                        ]
+                          .map(([label, aliases]) => [label, extractSection(reports.monitoring, aliases)])
+                          .filter(([, value]) => value)
+                        // If the agent ignored the expected layout, show its text as-is.
+                        if (fields.length === 0) {
+                          return (
+                            <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{reports.monitoring}</ReactMarkdown></div>
+                          )
+                        }
+                        return (
+                          <div className="pg-summary-fields">
+                            {fields.map(([label, value]) => (
                               <div className="pg-summary-field" key={label}>
                                 <strong>{label}</strong>
-                                {value ? (
-                                  <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown></div>
-                                ) : <p className="pg-empty-state">Not explicitly reported.</p>}
+                                <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown></div>
                               </div>
-                            )
-                          })}
-                        </div>
-                      ) : <p className="pg-empty-state">No separate monitoring report was returned.</p>}
+                            ))}
+                          </div>
+                        )
+                      })() : <p className="pg-empty-state">No separate monitoring report was returned.</p>}
                     </section>
 
                     <section className="pg-report-panel pg-diagnosis-panel">
@@ -2203,7 +2199,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                             ['Root cause', ['Root cause', 'Primary root cause', 'Likely root cause']],
                             ['Conclusion', ['Conclusion', 'Diagnosis conclusion']],
                           ].map(([label, aliases]) => {
-                            const value = extractField(reports.diagnosis, aliases)
+                            const value = extractSection(reports.diagnosis, aliases)
                             return (
                               <div className="pg-summary-field" key={label}>
                                 <strong>{label}</strong>
@@ -2216,9 +2212,45 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                         </div>
                       ) : <p className="pg-empty-state">No separate diagnosis report was returned.</p>}
                     </section>
+                    
+                    {historical && (
+                      <section className="pg-report-panel pg-historical-panel">
+                        <div className="pg-panel-kicker">03 · HISTORICAL MATCH</div>
+                        <h4>Similar incident found</h4>
+                        <div className="pg-summary-fields">
+                          <div className="pg-summary-field">
+                            <strong>Previous incident</strong>
+                            <p>
+                              {hist('jobName', 'job_name') || 'Unknown job'} build #{hist('buildNumber', 'build_number') ?? '?'}
+                            </p>
+                          </div>
+                          <div className="pg-summary-field">
+                            <strong>Root cause match</strong>
+                            {hasReport(extractSection(reports.diagnosis, ['Historical confirmation'])) ? (
+                              <div className="agent-report-markdown">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {extractSection(reports.diagnosis, ['Historical confirmation'])}
+                                </ReactMarkdown>
+                              </div>
+                            ) : <p className="pg-empty-state">Not explicitly reported.</p>}
+                          </div>
+                          <div className="pg-summary-field">
+                            <strong>How it was solved</strong>
+                            <p>{hist('resolutionMethod', 'resolution_method') || 'Not recorded'}</p>
+                            {(hist('actions', 'actions') || []).length > 0 && (
+                              <ul className="pg-historical-actions">
+                                {hist('actions', 'actions').map((action, index) => (
+                                  <li key={index}>{action.text}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </section>
+                    )}
 
                     <section className="pg-report-panel pg-remediation-panel">
-                      <div className="pg-panel-kicker">03 · PROPOSED RESPONSE</div>
+                      <div className="pg-panel-kicker">04 · PROPOSED RESPONSE</div>
                       <h4>Remediation</h4>
                       {steps.length > 0 ? (
                         <ol className="pg-proposed-steps">

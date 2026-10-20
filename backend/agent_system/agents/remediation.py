@@ -24,6 +24,31 @@ Write a structured Remediation Report that includes:
 6. End with AGENT_CONFIDENCE: NN (integer 0-100), estimating confidence that this proposal is safe and supported by current evidence.
 """
 
+def _historical_context_block(historical_incident: dict | None) -> str:
+    """historical_incident, when present, was confirmed by the Diagnosis
+    agent and verified server-side — Remediation must NOT call any tool for
+    this, it only reads this context."""
+    if not historical_incident:
+        return ""
+    method = historical_incident.get("resolution_method", "Unknown")
+    actions_text = "\n".join(
+        f"- {a.get('text', '')}" for a in (historical_incident.get("actions") or []) if a.get("text")
+    )
+    past_steps_text = "\n".join(
+        f"- {s.get('text', '')}" for s in (historical_incident.get("steps") or []) if s.get("text")
+    )
+    parts = [
+        "\n\nHISTORICAL CONTEXT (Diagnosis confirmed this build's root cause "
+        "matches a previously RESOLVED incident):",
+        f"- Previous incident: {historical_incident.get('job_name', 'Unknown job')} "
+        f"build #{historical_incident.get('build_number', '?')}",
+        f"- Recorded resolution method: {method}",
+    ]
+    if actions_text:
+        parts.append(f"- Recorded outcome of that resolution:\n{actions_text}")
+    if past_steps_text:
+        parts.append(f"- Steps proposed for that incident at the time:\n{past_steps_text}")
+    return "\n".join(parts) + "\n"
 
 def run_remediation(state: InvestigationState) -> InvestigationState:
     llm = ChatGroq(
@@ -43,12 +68,22 @@ Prepare a safe, evidence-based proposal for the supplied Jenkins failure.
 Rules:
 - Do not call tools in this evidence-based path.
 - Do not invent historical fixes, runbooks, team members, or on-call contacts.
-- This is a proposal only; never claim an action was executed.
+- This is a proposal only; never claim an action was executed BY YOU — if
+  HISTORICAL CONTEXT shows the past incident was resolved automatically, say
+  the past one was handled automatically; do not claim you are applying it now.
 - Recommend reversible diagnostic steps first.
 - Require human approval for deployments, restarts, destructive changes,
   production modifications, or other disruptive actions.
-- Do not use, request, infer, or refer to historical incidents or past fixes.
-- Base this proposal only on the current Monitoring Report and Diagnosis Report.
+- A HISTORICAL CONTEXT section may appear at the end of the human message:
+  a previously resolved incident Diagnosis confirmed matches this build's
+  root cause. You have no tool to look this up yourself — use only what is
+  given. If present, your Step 2 proposal's Recommended action must state
+  that this matches that previous incident, name its resolution method, and
+  your steps should reuse/adapt its recorded actions where they still apply
+  to this build. If no HISTORICAL CONTEXT is supplied, do not reference
+  historical incidents, past fixes, or memory.
+- Base this proposal on the current Monitoring Report and Diagnosis Report,
+  and on HISTORICAL CONTEXT when supplied.
 
 - Write your output in exactly this order, with nothing before it:
 
@@ -64,7 +99,10 @@ Rules:
   remediation proposal in markdown with the sections below. Do not repeat the
   step list: the steps already exist in the JSON block above.
     **Recommended action:** the single most important thing to do now, and why it
-    addresses the diagnosed root cause (2-3 sentences).
+    addresses the diagnosed root cause (2-3 sentences). If HISTORICAL CONTEXT was
+    supplied, state here that this matches that previous incident and its
+    recorded resolution method (manual or automatic), and that your steps
+    reuse it.
     **Owner:** role or team (use team contacts only if they were supplied).
     **Automation safety:** which steps are safe for PipeGuard to automate, which need
     a human, and why.
@@ -82,6 +120,7 @@ Rules:
             f"build #{state['build_number']}.\n\n"
             f"MONITORING REPORT:\n{state['monitoring_report']}\n\n"
             f"DIAGNOSIS REPORT:\n{state['diagnosis_report']}"
+            f"{_historical_context_block(state.get('historical_incident'))}"
         )
         result = llm.invoke([
             ("system", grounded_prompt),

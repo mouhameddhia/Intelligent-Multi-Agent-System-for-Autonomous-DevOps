@@ -1,4 +1,12 @@
-"""Application-only deterministic historical matcher; never imported by agents."""
+"""Historical incident matching.
+
+get_candidate_incidents() / resolve_historical_match() ARE used by an agent
+(Diagnosis, via build_tools.make_historical_search_tool) — retrieval now
+happens at runtime inside the investigation graph, not after it.
+
+find_related_historical_incident() and _resolution() below are the original
+deterministic, non-agent matcher; kept for compatibility, no longer called by
+the API layer."""
 import re
 from typing import Any
 
@@ -59,10 +67,100 @@ def _resolution(doc: dict[str, Any]) -> dict[str, Any] | None:
     feedback = doc.get("feedback") or {}
     passed = feedback.get("build_passed")
     if not isinstance(passed, bool): passed = None
-    return {"incident_id": str(doc.get("_id") or ""), "job_name": str(doc.get("job_name") or "Unknown job"),
-            "build_number": doc.get("build_number"), "resolution_method": method, "actions": actions,
-            "build_passed": passed, "feedback_comment": (feedback.get("comment") or "").strip()}
+    return {
+        "incident_id": str(doc.get("_id") or ""), "job_name": str(doc.get("job_name") or "Unknown job"),
+        "build_number": doc.get("build_number"), "resolution_method": method, "actions": actions,
+        "build_passed": passed, "feedback_comment": (feedback.get("comment") or "").strip(),
+        # Added for Remediation's consumption (not required by the incident
+        # schema's historical_incident block, but additionalProperties is
+        # unrestricted there, so this stays schema-conformant):
+        "resolution_path": path,
+        "steps": doc.get("steps") or [],
+    }
 
+def _files_touched(evidence: dict[str, Any]) -> list[str]:
+    github = (evidence or {}).get("github") or {}
+    files = github.get("files") or []
+    return [f.get("filename") for f in files if isinstance(f, dict) and f.get("filename")]
+
+
+def get_candidate_incidents(
+    current_evidence: dict[str, Any],
+    job_name: str,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Ranked, deduplicated KNOWN-GOOD candidates for the Diagnosis agent to
+    judge semantically. Tier A (exact evidence signature, via the same
+    _signature() used by find_related_historical_incident) is listed first
+    and flagged exact_signature_match=True; Tier B (same job / touched files,
+    via db.find_similar_incidents) fills remaining slots. Each candidate
+    carries the matched incident's OWN diagnosis_report so the agent can
+    compare root-cause mechanism, not just surface signals. Never raises —
+    returns [] on any failure, consistent with db.py's best-effort contract."""
+    from .db import find_similar_incidents, list_incidents  # local: avoid import-time cycles
+
+    try:
+        current_sig = _signature(current_evidence or {})
+        candidates: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        if current_sig is not None:
+            for doc in list_incidents(limit=500):
+                if not isinstance(doc, dict) or _signature(doc.get("evidence") or {}) != current_sig:
+                    continue
+                summary = _resolution(doc)
+                if summary is None or summary["incident_id"] in seen_ids:
+                    continue
+                candidates.append({
+                    "incident_id": summary["incident_id"],
+                    "job_name": summary["job_name"],
+                    "build_number": summary["build_number"],
+                    "exact_signature_match": True,
+                    "resolution_method": summary["resolution_method"],
+                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
+                })
+                seen_ids.add(summary["incident_id"])
+                if len(candidates) >= limit:
+                    return candidates
+
+        if len(candidates) < limit:
+            for doc in find_similar_incidents(job_name, _files_touched(current_evidence), limit=limit):
+                summary = _resolution(doc)
+                if summary is None or summary["incident_id"] in seen_ids:
+                    continue
+                candidates.append({
+                    "incident_id": summary["incident_id"],
+                    "job_name": summary["job_name"],
+                    "build_number": summary["build_number"],
+                    "exact_signature_match": False,
+                    "resolution_method": summary["resolution_method"],
+                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
+                })
+                seen_ids.add(summary["incident_id"])
+                if len(candidates) >= limit:
+                    break
+
+        return candidates
+    except Exception:
+        return []
+
+
+def resolve_historical_match(incident_id: str | None) -> dict[str, Any] | None:
+    """Given an incident_id the Diagnosis agent CLAIMS matches, re-fetch the
+    FULL record from Mongo and reshape it with _resolution(). This is the only
+    place an LLM-claimed match becomes a trusted, schema-conformant
+    historical_incident — the agent's own paraphrase is never stored or
+    passed to Remediation directly."""
+    if not incident_id:
+        return None
+    from .db import get_incident  # local: avoid import-time cycles
+    try:
+        doc = get_incident(incident_id)
+        if not isinstance(doc, dict):
+            return None
+        return _resolution(doc)
+    except Exception:
+        return None
 def find_related_historical_incident(current_evidence: dict[str, Any], incidents: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Newest exact normalized test identifier + assertion match with recorded actions."""
     current = _signature(current_evidence or {})

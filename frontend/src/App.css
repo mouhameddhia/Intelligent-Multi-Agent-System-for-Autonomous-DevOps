@@ -3299,3 +3299,27 @@ button:disabled {
 .pg-report .pg-summary-field > strong { display: block; margin-bottom: 5px; }
 .pg-report .pg-summary-field .agent-report-markdown > :first-child { margin-top: 0; }
 .pg-report .pg-summary-field .agent-report-markdown > :last-child { margin-bottom: 0; }
+
+
+/* Monitoring · Build summary table: label column fits its content, value column fills the card. */
+.pg-report .pg-monitoring-panel .agent-report-markdown table {
+  display: table;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  table-layout: auto;
+}
+.pg-report .pg-monitoring-panel .agent-report-markdown th,
+.pg-report .pg-monitoring-panel .agent-report-markdown td {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  overflow-wrap: anywhere;
+}
+.pg-report .pg-monitoring-panel .agent-report-markdown th:first-child,
+.pg-report .pg-monitoring-panel .agent-report-markdown td:first-child {
+  width: 1%;
+  white-space: nowrap;
+  font-weight: 650;
+  color: #55566c;
+}

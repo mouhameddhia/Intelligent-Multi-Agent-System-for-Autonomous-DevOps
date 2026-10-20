@@ -16,7 +16,7 @@ from langgraph.types import Command
 from agent_system.orchestrator.graph import investigation_graph
 from agent_system.db import save_incident, get_incident, list_incidents
 from agent_system.agents.report_assembly import build_unified_report
-from agent_system.historical_match import find_related_historical_incident
+from agent_system.agents.confidence import summarize_confidence
 
 
 router = APIRouter(tags=["investigation"])
@@ -55,6 +55,7 @@ class InvestigateResponse(BaseModel):
     historical_incident: dict[str, Any] | None = None
     agent_confidence: dict[str, int | None] = Field(default_factory=dict)
     overall_confidence: int | None = None
+    confidence_source: dict[str, str] = Field(default_factory=dict)
     steps: list[dict[str, Any]] = Field(default_factory=list)
     engineer_id: str = ""
     source: str = ""
@@ -100,6 +101,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
         "remediation_report": "",
         "approval_status": "",
         "fix_result": {},
+        "historical_incident": None,
     }
 
     config = {
@@ -110,34 +112,15 @@ def investigate(request: InvestigateRequest, http_request: Request):
     try:
         result = investigation_graph.invoke(initial_state, config=config)
 
-        incidents = list_incidents(limit=500)
+        # Diagnosis already retrieved, judged, and verified this via its
+        # search_similar_incidents tool + resolve_historical_match() — the API
+        # layer just reads the result, it does not retrieve anything itself.
+        historical_incident = result.get("historical_incident")
 
-        historical_incident = find_related_historical_incident(
-            request.evidence,
-            incidents,
-        )
-
-        confidence_values = [
-            result.get("monitoring_confidence"),
-            result.get("diagnosis_confidence"),
-            result.get("remediation_confidence"),
-        ]
-
-        overall_confidence = (
-            round(sum(confidence_values) / 3)
-            if all(
-                isinstance(v, (int, float)) and 0 <= v <= 100
-                for v in confidence_values
-            )
-            else None
-        )
-
-        agent_confidence = {
-            "monitoring": confidence_values[0],
-            "diagnosis": confidence_values[1],
-            "remediation": confidence_values[2],
+        agent_confidence, overall_confidence = summarize_confidence(result)
+        confidence_source = {
+            "monitoring": result.get("monitoring_confidence_source") or "agent",
         }
-
         unified_report = build_unified_report({
             **result,
             "historical_incident": historical_incident,
@@ -155,6 +138,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "historical_incident": historical_incident,
             "agent_confidence": agent_confidence,
             "overall_confidence": overall_confidence,
+            "confidence_source": confidence_source,
             "schema_version": 3,
             "engineer_id": request.engineer_id,
             "source": request.source,
@@ -182,6 +166,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
             historical_incident=historical_incident,
             agent_confidence=agent_confidence,
             overall_confidence=overall_confidence,
+            confidence_source=confidence_source,
             steps=result.get("steps", []),
             engineer_id=request.engineer_id,
             source=request.source,

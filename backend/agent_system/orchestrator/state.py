@@ -30,6 +30,11 @@ class InvestigationState(TypedDict, total=False):
     monitoring_confidence: int | None
     diagnosis_confidence: int | None
     remediation_confidence: int | None
+    
+    
+    # Where the Monitoring score came from: "agent" (model-reported),
+    # "evidence_coverage" (deterministic fallback) or "unavailable".
+    monitoring_confidence_source: str
 
     # Phase 1: who is investigating, and what kind of incident this is.
     engineer_id: str
@@ -38,6 +43,11 @@ class InvestigationState(TypedDict, total=False):
 
     # Structured remediation steps (id, text, order_shown, disruptive, outcome).
     steps: list[dict[str, Any]]
+
+    # Set by Diagnosis after its one search_similar_incidents call, verified
+    # server-side via historical_match.resolve_historical_match(). None if no
+    # genuine match. Remediation reads this; it makes no DB/tool call of its own.
+    historical_incident: dict[str, Any] | None
 
     # Set by the human_approval node once the devops engineer responds.
     approval_status: str
