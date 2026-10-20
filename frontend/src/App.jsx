@@ -43,6 +43,54 @@ const initialIntegrations = [
       { name: 'url', label: 'Prometheus URL', placeholder: 'http://localhost:9090' },
     ],
   },
+  {
+    id: 'grafana',
+    name: 'Grafana',
+    description: 'Browse dashboards and pull incident annotations around a build failure.',
+    category: 'Monitoring',
+    icon: 'G',
+    color: 'grafana',
+    fields: [
+      { name: 'url', label: 'Grafana URL', placeholder: 'http://localhost:3000' },
+      { name: 'token', label: 'Service account token', placeholder: 'Enter Grafana API token', secret: true },
+    ],
+  },
+  {
+    id: 'loki',
+    name: 'Loki',
+    description: 'Search logs across every service in the build window, not just the Jenkins console log.',
+    category: 'Logging',
+    icon: 'L',
+    color: 'loki',
+    fields: [
+      { name: 'url', label: 'Loki URL', placeholder: 'http://localhost:3100' },
+    ],
+  },
+  {
+    id: 'sonarqube',
+    name: 'SonarQube',
+    description: 'Surface known code-quality and security issues on the affected repository.',
+    category: 'Code quality',
+    icon: 'S',
+    color: 'sonarqube',
+    fields: [
+      { name: 'url', label: 'SonarQube URL', placeholder: 'http://localhost:9000' },
+      { name: 'token', label: 'User token', placeholder: 'Enter SonarQube token', secret: true },
+    ],
+  },
+  {
+    id: 'kubernetes',
+    name: 'Kubernetes',
+    description: 'Pull pod events around a build failure to catch deployment and infra causes.',
+    category: 'Infrastructure',
+    icon: 'K',
+    color: 'kubernetes',
+    fields: [
+      { name: 'url', label: 'API server URL', placeholder: 'https://127.0.0.1:6443' },
+      { name: 'token', label: 'Service account token', placeholder: 'Enter Kubernetes token', secret: true },
+      { name: 'verify_tls', label: 'Verify TLS certificate (uncheck for self-signed/dev clusters)', type: 'checkbox', defaultValue: true },
+    ],
+  },
 ]
 
 const navigation = [
@@ -103,6 +151,32 @@ function App() {
   const [prometheusSummary, setPrometheusSummary] = useState(null)
   const [prometheusConnectionStatus, setPrometheusConnectionStatus] = useState('disconnected')
   const [prometheusConnectionMessage, setPrometheusConnectionMessage] = useState('')
+  const [grafanaUrl, setGrafanaUrl] = useState('')
+  const [grafanaToken, setGrafanaToken] = useState('')
+  const [grafanaDashboards, setGrafanaDashboards] = useState([])
+  const [grafanaSummary, setGrafanaSummary] = useState(null)
+  const [grafanaConnectionStatus, setGrafanaConnectionStatus] = useState('disconnected')
+  const [grafanaConnectionMessage, setGrafanaConnectionMessage] = useState('')
+  const [lokiUrl, setLokiUrl] = useState('')
+  const [lokiLabels, setLokiLabels] = useState([])
+  const [lokiSummary, setLokiSummary] = useState(null)
+  const [lokiConnectionStatus, setLokiConnectionStatus] = useState('disconnected')
+  const [lokiConnectionMessage, setLokiConnectionMessage] = useState('')
+  const [sonarqubeUrl, setSonarqubeUrl] = useState('')
+  const [sonarqubeToken, setSonarqubeToken] = useState('')
+  const [sonarqubeProjects, setSonarqubeProjects] = useState([])
+  const [selectedSonarqubeProject, setSelectedSonarqubeProject] = useState('')
+  const [sonarqubeSummary, setSonarqubeSummary] = useState(null)
+  const [sonarqubeConnectionStatus, setSonarqubeConnectionStatus] = useState('disconnected')
+  const [sonarqubeConnectionMessage, setSonarqubeConnectionMessage] = useState('')
+  const [kubernetesUrl, setKubernetesUrl] = useState('')
+  const [kubernetesToken, setKubernetesToken] = useState('')
+  const [kubernetesVerifyTls, setKubernetesVerifyTls] = useState(true)
+  const [kubernetesNamespaces, setKubernetesNamespaces] = useState([])
+  const [selectedKubernetesNamespace, setSelectedKubernetesNamespace] = useState('')
+  const [kubernetesSummary, setKubernetesSummary] = useState(null)
+  const [kubernetesConnectionStatus, setKubernetesConnectionStatus] = useState('disconnected')
+  const [kubernetesConnectionMessage, setKubernetesConnectionMessage] = useState('')
   const [investigation, setInvestigation] = useState(null)
   const [isInvestigating, setIsInvestigating] = useState(false)
   const [isInvestigationModalOpen, setIsInvestigationModalOpen] = useState(false)
@@ -219,6 +293,13 @@ function App() {
         }
       }
 
+      // Time window around the build's failure, shared by Prometheus and Grafana.
+      const hasTimestamp = Boolean(evidence.timestamp)
+      const windowStart = hasTimestamp ? Math.floor(evidence.timestamp / 1000) - 300 : null
+      const windowEnd = hasTimestamp
+        ? Math.ceil((evidence.timestamp + (evidence.duration_ms || 0)) / 1000) + 300
+        : null
+
       // Query real Prometheus samples around this build's start/end timestamps.
       let metrics = []
       if (!prometheusUrl) {
@@ -227,17 +308,13 @@ function App() {
           status: 'not_configured',
           message: 'Connect Prometheus in Settings to retrieve time-aligned metrics.',
         }]
-      } else if (!evidence.timestamp) {
+      } else if (!hasTimestamp) {
         metrics = [{
           query: 'Prometheus range',
           status: 'unavailable',
           message: 'The selected Jenkins build has no timestamp for alignment.',
         }]
       } else {
-        const start = Math.floor(evidence.timestamp / 1000) - 300
-        const end = Math.ceil(
-          (evidence.timestamp + (evidence.duration_ms || 0)) / 1000,
-        ) + 300
         const expressions = [
           'up',
           'node_load1',
@@ -250,8 +327,8 @@ function App() {
             const result = await postJson('/api/prometheus/query-range', {
               url: prometheusUrl,
               query,
-              start,
-              end,
+              start: windowStart,
+              end: windowEnd,
               step: '30s',
             })
             return {
@@ -259,13 +336,143 @@ function App() {
               status: 'success',
               count: result.count,
               results: result.results || [],
-              start,
-              end,
+              start: windowStart,
+              end: windowEnd,
             }
           } catch (error) {
             return { query, status: 'error', message: error.message }
           }
         }))
+      }
+
+      // Query real Grafana annotations (deploy markers, alert state changes, ...)
+      // in the same window, to surface anything a human marked around the failure.
+      let grafana
+      if (!grafanaUrl) {
+        grafana = {
+          status: 'not_configured',
+          message: 'Connect Grafana in Settings to retrieve incident annotations.',
+        }
+      } else if (!hasTimestamp) {
+        grafana = {
+          status: 'unavailable',
+          message: 'The selected Jenkins build has no timestamp for alignment.',
+        }
+      } else {
+        try {
+          const result = await postJson('/api/grafana/annotations', {
+            url: grafanaUrl,
+            api_token: grafanaToken,
+            start: windowStart,
+            end: windowEnd,
+          })
+          grafana = {
+            status: 'success',
+            count: result.count,
+            annotations: result.annotations || [],
+            start: windowStart,
+            end: windowEnd,
+          }
+        } catch (error) {
+          grafana = { status: 'error', message: error.message }
+        }
+      }
+
+      // Query real Loki logs across every service in the same window, so a
+      // failure caused by a downstream service shows up, not just this one job.
+      let loki
+      if (!lokiUrl) {
+        loki = {
+          status: 'not_configured',
+          message: 'Connect Loki in Settings to search logs across every service.',
+        }
+      } else if (!hasTimestamp) {
+        loki = {
+          status: 'unavailable',
+          message: 'The selected Jenkins build has no timestamp for alignment.',
+        }
+      } else {
+        try {
+          const result = await postJson('/api/loki/query-range', {
+            url: lokiUrl,
+            query: '{job=~".+"}',
+            start: windowStart,
+            end: windowEnd,
+            limit: 50,
+          })
+          loki = {
+            status: 'success',
+            count: result.count,
+            lines: result.lines || [],
+            start: windowStart,
+            end: windowEnd,
+          }
+        } catch (error) {
+          loki = { status: 'error', message: error.message }
+        }
+      }
+
+      // Pull real SonarQube issues for the project selected in Settings, so
+      // Diagnosis sees known code-quality/security problems, not just the log.
+      let sonarqube
+      if (!sonarqubeUrl || !selectedSonarqubeProject) {
+        sonarqube = {
+          status: 'not_configured',
+          message: 'Connect SonarQube and select a project in Settings to surface known issues.',
+        }
+      } else {
+        try {
+          const result = await postJson('/api/sonarqube/issues', {
+            url: sonarqubeUrl,
+            token: sonarqubeToken,
+            project_key: selectedSonarqubeProject,
+            limit: 10,
+          })
+          sonarqube = {
+            status: 'success',
+            projectKey: selectedSonarqubeProject,
+            count: result.count,
+            issues: result.issues || [],
+          }
+        } catch (error) {
+          sonarqube = { status: 'error', message: error.message }
+        }
+      }
+
+      // Pull real Kubernetes events for the namespace selected in Settings, in
+      // the same window, to catch deployment/infra causes (OOMKilled, BackOff, ...).
+      let kubernetes
+      if (!kubernetesUrl || !selectedKubernetesNamespace) {
+        kubernetes = {
+          status: 'not_configured',
+          message: 'Connect Kubernetes and select a namespace in Settings to catch deployment/infra causes.',
+        }
+      } else if (!hasTimestamp) {
+        kubernetes = {
+          status: 'unavailable',
+          message: 'The selected Jenkins build has no timestamp for alignment.',
+        }
+      } else {
+        try {
+          const result = await postJson('/api/kubernetes/events', {
+            url: kubernetesUrl,
+            token: kubernetesToken,
+            verify_tls: kubernetesVerifyTls,
+            namespace: selectedKubernetesNamespace,
+            start: windowStart,
+            end: windowEnd,
+          })
+          kubernetes = {
+            status: 'success',
+            namespace: selectedKubernetesNamespace,
+            count: result.count,
+            events: result.events || [],
+            start: windowStart,
+            end: windowEnd,
+          }
+        } catch (error) {
+          kubernetes = { status: 'error', message: error.message }
+        }
       }
 
       // Live provider evidence is complete; now request the real agent workflow.
@@ -279,6 +486,10 @@ function App() {
         evidence,
         github,
         metrics,
+        grafana,
+        loki,
+        sonarqube,
+        kubernetes,
         agentStatus: 'running',
         agentReports: null,
         agentError: '',
@@ -297,6 +508,22 @@ function App() {
           ...metric,
           results: (metric.results || []).slice(0, 5),
         })),
+        grafana: {
+          ...grafana,
+          annotations: (grafana.annotations || []).slice(0, 20),
+        },
+        loki: {
+          ...loki,
+          lines: (loki.lines || []).slice(0, 20),
+        },
+        sonarqube: {
+          ...sonarqube,
+          issues: (sonarqube.issues || []).slice(0, 10),
+        },
+        kubernetes: {
+          ...kubernetes,
+          events: (kubernetes.events || []).slice(0, 20),
+        },
       }
 
       
@@ -739,31 +966,267 @@ try {
     return () => window.clearInterval(timer)
   }, [jenkinsCredentials, fetchJenkinsJobs])
 
+  const IMPLEMENTED_INTEGRATIONS = ['jenkins', 'github', 'prometheus', 'grafana', 'loki', 'sonarqube', 'kubernetes']
+
   function openConfiguration(integration) {
-    if (!['jenkins', 'github', 'prometheus'].includes(integration.id)) {
+    if (!IMPLEMENTED_INTEGRATIONS.includes(integration.id)) {
       setPageError(`${integration.name} integration is not implemented yet.`)
       return
+    }
+
+    const defaultFormValues = {
+      jenkins: { url: 'http://192.168.56.10:8080', username: '', token: '' },
+      github: { token: '' },
+      prometheus: { url: prometheusUrl || 'http://192.168.56.10:9090' },
+      grafana: { url: grafanaUrl || 'http://localhost:3000', token: '' },
+      loki: { url: lokiUrl || 'http://localhost:3100' },
+      sonarqube: { url: sonarqubeUrl || 'http://localhost:9000', token: '' },
+      kubernetes: { url: kubernetesUrl || 'https://127.0.0.1:6443', token: '', verify_tls: kubernetesVerifyTls },
     }
 
     setPageError('')
     setConnectionMessage('')
     setGithubConnectionMessage('')
+    setGrafanaConnectionMessage('')
+    setLokiConnectionMessage('')
+    setSonarqubeConnectionMessage('')
+    setKubernetesConnectionMessage('')
     setSelectedIntegration(integration.id)
-    setFormValues(
-      integration.id === 'jenkins'
-        ? {
-            url: 'http://192.168.56.10:8080',
-            username: '',
-            token: '',
-          }
-        : integration.id === 'prometheus'
-          ? { url: prometheusUrl || 'http://192.168.56.10:9090' }
-          : { token: '' },
-    )
+    setFormValues(defaultFormValues[integration.id] || {})
   }
 
   async function saveConfiguration(event) {
     event.preventDefault()
+
+    if (selectedIntegration === 'kubernetes') {
+      const url = (formValues.url || '').trim()
+      const token = (formValues.token || '').trim()
+      const verifyTls = formValues.verify_tls ?? true
+
+      setIsConnecting(true)
+      setKubernetesConnectionStatus('connecting')
+      setKubernetesConnectionMessage('Testing the Kubernetes API server and loading namespaces...')
+
+      try {
+        const testResponse = await fetch(`${API_URL}/api/kubernetes/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, token, verify_tls: verifyTls }),
+        })
+        const testData = await testResponse.json()
+
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `Kubernetes connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const namespacesResponse = await fetch(`${API_URL}/api/kubernetes/namespaces`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, token, verify_tls: verifyTls }),
+        })
+        const namespacesData = await namespacesResponse.json()
+
+        if (!namespacesResponse.ok) {
+          throw new Error(namespacesData.detail || `Could not load Kubernetes namespaces (HTTP ${namespacesResponse.status})`)
+        }
+
+        const namespaces = namespacesData.namespaces || []
+        setKubernetesUrl(url)
+        setKubernetesToken(token)
+        setKubernetesVerifyTls(verifyTls)
+        setKubernetesNamespaces(namespaces)
+        setSelectedKubernetesNamespace(namespaces[0]?.name || '')
+        setKubernetesSummary(testData)
+        setIntegrations((previous) =>
+          previous.map((integration) =>
+            integration.id === 'kubernetes'
+              ? { ...integration, connected: true }
+              : integration,
+          ),
+        )
+        setKubernetesConnectionStatus('connected')
+        setKubernetesConnectionMessage(
+          `Connected to Kubernetes ${testData.git_version || ''}. ${namespaces.length} namespaces retrieved.`,
+        )
+        setSelectedIntegration(null)
+      } catch (error) {
+        setKubernetesConnectionStatus('disconnected')
+        setKubernetesConnectionMessage(error.message || 'Could not connect to the Kubernetes API server.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'loki') {
+      const url = (formValues.url || '').trim()
+
+      setIsConnecting(true)
+      setLokiConnectionStatus('connecting')
+      setLokiConnectionMessage('Testing Loki and loading labels...')
+
+      try {
+        const testResponse = await fetch(`${API_URL}/api/loki/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        const testData = await testResponse.json()
+
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `Loki connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const labelsResponse = await fetch(`${API_URL}/api/loki/labels`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        const labelsData = await labelsResponse.json()
+
+        if (!labelsResponse.ok) {
+          throw new Error(labelsData.detail || `Could not load Loki labels (HTTP ${labelsResponse.status})`)
+        }
+
+        const labels = labelsData.labels || []
+        setLokiUrl(url)
+        setLokiLabels(labels)
+        setLokiSummary(testData)
+        setIntegrations((previous) =>
+          previous.map((integration) =>
+            integration.id === 'loki'
+              ? { ...integration, connected: true }
+              : integration,
+          ),
+        )
+        setLokiConnectionStatus('connected')
+        setLokiConnectionMessage(
+          `Connected to Loki. ${labels.length} labels retrieved.`,
+        )
+        setSelectedIntegration(null)
+      } catch (error) {
+        setLokiConnectionStatus('disconnected')
+        setLokiConnectionMessage(error.message || 'Could not connect to Loki.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'sonarqube') {
+      const url = (formValues.url || '').trim()
+      const token = (formValues.token || '').trim()
+
+      setIsConnecting(true)
+      setSonarqubeConnectionStatus('connecting')
+      setSonarqubeConnectionMessage('Testing SonarQube and loading projects...')
+
+      try {
+        const testResponse = await fetch(`${API_URL}/api/sonarqube/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, token }),
+        })
+        const testData = await testResponse.json()
+
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `SonarQube connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const projectsResponse = await fetch(`${API_URL}/api/sonarqube/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, token }),
+        })
+        const projectsData = await projectsResponse.json()
+
+        if (!projectsResponse.ok) {
+          throw new Error(projectsData.detail || `Could not load SonarQube projects (HTTP ${projectsResponse.status})`)
+        }
+
+        const projects = projectsData.projects || []
+        setSonarqubeUrl(url)
+        setSonarqubeToken(token)
+        setSonarqubeProjects(projects)
+        setSelectedSonarqubeProject(projects[0]?.key || '')
+        setSonarqubeSummary(testData)
+        setIntegrations((previous) =>
+          previous.map((integration) =>
+            integration.id === 'sonarqube'
+              ? { ...integration, connected: true }
+              : integration,
+          ),
+        )
+        setSonarqubeConnectionStatus('connected')
+        setSonarqubeConnectionMessage(
+          `Connected to SonarQube ${testData.version || ''}. ${projects.length} projects retrieved.`,
+        )
+        setSelectedIntegration(null)
+      } catch (error) {
+        setSonarqubeConnectionStatus('disconnected')
+        setSonarqubeConnectionMessage(error.message || 'Could not connect to SonarQube.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'grafana') {
+      const url = (formValues.url || '').trim()
+      const token = (formValues.token || '').trim()
+
+      setIsConnecting(true)
+      setGrafanaConnectionStatus('connecting')
+      setGrafanaConnectionMessage('Testing Grafana and loading dashboards...')
+
+      try {
+        const testResponse = await fetch(`${API_URL}/api/grafana/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, api_token: token }),
+        })
+        const testData = await testResponse.json()
+
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `Grafana connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const dashboardsResponse = await fetch(`${API_URL}/api/grafana/dashboards`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, api_token: token }),
+        })
+        const dashboardsData = await dashboardsResponse.json()
+
+        if (!dashboardsResponse.ok) {
+          throw new Error(dashboardsData.detail || `Could not load Grafana dashboards (HTTP ${dashboardsResponse.status})`)
+        }
+
+        const dashboards = dashboardsData.dashboards || []
+        setGrafanaUrl(url)
+        setGrafanaToken(token)
+        setGrafanaDashboards(dashboards)
+        setGrafanaSummary(testData)
+        setIntegrations((previous) =>
+          previous.map((integration) =>
+            integration.id === 'grafana'
+              ? { ...integration, connected: true }
+              : integration,
+          ),
+        )
+        setGrafanaConnectionStatus('connected')
+        setGrafanaConnectionMessage(
+          `Connected to Grafana ${testData.version || ''}. ${dashboards.length} dashboards retrieved.`,
+        )
+        setSelectedIntegration(null)
+      } catch (error) {
+        setGrafanaConnectionStatus('disconnected')
+        setGrafanaConnectionMessage(error.message || 'Could not connect to Grafana.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
 
     if (selectedIntegration === 'prometheus') {
       const url = (formValues.url || '').trim()
@@ -1277,6 +1740,238 @@ try {
       )}
     </section>
 
+    <section className="prometheus-panel">
+      <div className="prometheus-panel-heading">
+        <div>
+          <div className="eyebrow">MONITORING</div>
+          <h2>Grafana dashboards</h2>
+          <p>Dashboards retrieved from your connected Grafana server.</p>
+        </div>
+        <span className={`prometheus-state ${grafanaConnectionStatus === 'connected' ? 'is-connected' : ''}`}>
+          <span className="status-dot" />
+          {grafanaConnectionStatus === 'connected' ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+
+      {grafanaSummary && (
+        <div className="prometheus-summary">
+          <div>
+            <span>Dashboards</span>
+            <strong>{grafanaDashboards.length}</strong>
+          </div>
+          <div>
+            <span>Organization</span>
+            <strong>{grafanaSummary.org_name || '—'}</strong>
+          </div>
+          <div>
+            <span>Grafana version</span>
+            <strong>{grafanaSummary.version || '—'}</strong>
+          </div>
+        </div>
+      )}
+
+      {grafanaDashboards.length > 0 ? (
+        <div className="jobs-table-wrap">
+          <table className="jobs-table">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Folder</th>
+                <th>Tags</th>
+                <th>Dashboard</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grafanaDashboards.map((dashboard) => (
+                <tr key={dashboard.uid}>
+                  <td><strong>{dashboard.title || 'Untitled'}</strong></td>
+                  <td>{dashboard.folder_title || '—'}</td>
+                  <td>{(dashboard.tags || []).join(', ') || '—'}</td>
+                  <td>
+                    <a className="job-link" href={dashboard.url} target="_blank" rel="noreferrer">
+                      Open ↗
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="prometheus-empty">
+          <strong>
+            {grafanaConnectionStatus === 'connecting'
+              ? 'Connecting to Grafana…'
+              : 'No Grafana dashboards loaded yet'}
+          </strong>
+          <p>
+            {grafanaConnectionMessage ||
+              'Connect Grafana in Settings to retrieve real dashboards and incident annotations.'}
+          </p>
+          <button className="primary-button" onClick={() => setActivePage('settings')}>
+            Configure Grafana <span>→</span>
+          </button>
+        </div>
+      )}
+    </section>
+
+    <section className="prometheus-panel">
+      <div className="prometheus-panel-heading">
+        <div>
+          <div className="eyebrow">LOGGING</div>
+          <h2>Loki labels</h2>
+          <p>Known log label names retrieved from your connected Loki server.</p>
+        </div>
+        <span className={`prometheus-state ${lokiConnectionStatus === 'connected' ? 'is-connected' : ''}`}>
+          <span className="status-dot" />
+          {lokiConnectionStatus === 'connected' ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+
+      {lokiSummary && (
+        <div className="prometheus-summary">
+          <div>
+            <span>Labels</span>
+            <strong>{lokiLabels.length}</strong>
+          </div>
+        </div>
+      )}
+
+      {lokiLabels.length > 0 ? (
+        <p className="data-caption">
+          {lokiLabels.join(', ')}
+        </p>
+      ) : (
+        <div className="prometheus-empty">
+          <strong>
+            {lokiConnectionStatus === 'connecting'
+              ? 'Connecting to Loki…'
+              : 'No Loki labels loaded yet'}
+          </strong>
+          <p>
+            {lokiConnectionMessage ||
+              'Connect Loki in Settings to search logs across every service during an investigation.'}
+          </p>
+          <button className="primary-button" onClick={() => setActivePage('settings')}>
+            Configure Loki <span>→</span>
+          </button>
+        </div>
+      )}
+    </section>
+
+    <section className="prometheus-panel">
+      <div className="prometheus-panel-heading">
+        <div>
+          <div className="eyebrow">CODE QUALITY</div>
+          <h2>SonarQube projects</h2>
+          <p>Projects retrieved from your connected SonarQube server. Pick the one matching the repository you investigate.</p>
+        </div>
+        <span className={`prometheus-state ${sonarqubeConnectionStatus === 'connected' ? 'is-connected' : ''}`}>
+          <span className="status-dot" />
+          {sonarqubeConnectionStatus === 'connected' ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+
+      {sonarqubeProjects.length > 0 ? (
+        <div className="github-browser-toolbar">
+          <label htmlFor="sonarqube-project">Project</label>
+          <select
+            id="sonarqube-project"
+            className="github-repo-select"
+            value={selectedSonarqubeProject}
+            onChange={(event) => setSelectedSonarqubeProject(event.target.value)}
+          >
+            {sonarqubeProjects.map((project) => (
+              <option key={project.key} value={project.key}>
+                {project.name} ({project.key})
+              </option>
+            ))}
+          </select>
+          <span className="github-repo-count">
+            {sonarqubeProjects.length} projects
+          </span>
+        </div>
+      ) : (
+        <div className="prometheus-empty">
+          <strong>
+            {sonarqubeConnectionStatus === 'connecting'
+              ? 'Connecting to SonarQube…'
+              : 'No SonarQube projects loaded yet'}
+          </strong>
+          <p>
+            {sonarqubeConnectionMessage ||
+              'Connect SonarQube in Settings to surface known code-quality issues during an investigation.'}
+          </p>
+          <button className="primary-button" onClick={() => setActivePage('settings')}>
+            Configure SonarQube <span>→</span>
+          </button>
+        </div>
+      )}
+    </section>
+
+    <section className="prometheus-panel">
+      <div className="prometheus-panel-heading">
+        <div>
+          <div className="eyebrow">INFRASTRUCTURE</div>
+          <h2>Kubernetes namespaces</h2>
+          <p>Namespaces retrieved from your connected cluster. Pick the one running the service you investigate.</p>
+        </div>
+        <span className={`prometheus-state ${kubernetesConnectionStatus === 'connected' ? 'is-connected' : ''}`}>
+          <span className="status-dot" />
+          {kubernetesConnectionStatus === 'connected' ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+
+      {kubernetesSummary && (
+        <div className="prometheus-summary">
+          <div>
+            <span>Namespaces</span>
+            <strong>{kubernetesNamespaces.length}</strong>
+          </div>
+          <div>
+            <span>Cluster version</span>
+            <strong>{kubernetesSummary.git_version || '—'}</strong>
+          </div>
+        </div>
+      )}
+
+      {kubernetesNamespaces.length > 0 ? (
+        <div className="github-browser-toolbar">
+          <label htmlFor="kubernetes-namespace">Namespace</label>
+          <select
+            id="kubernetes-namespace"
+            className="github-repo-select"
+            value={selectedKubernetesNamespace}
+            onChange={(event) => setSelectedKubernetesNamespace(event.target.value)}
+          >
+            {kubernetesNamespaces.map((namespace) => (
+              <option key={namespace.name} value={namespace.name}>
+                {namespace.name} ({namespace.phase || 'unknown'})
+              </option>
+            ))}
+          </select>
+          <span className="github-repo-count">
+            {kubernetesNamespaces.length} namespaces
+          </span>
+        </div>
+      ) : (
+        <div className="prometheus-empty">
+          <strong>
+            {kubernetesConnectionStatus === 'connecting'
+              ? 'Connecting to Kubernetes…'
+              : 'No Kubernetes namespaces loaded yet'}
+          </strong>
+          <p>
+            {kubernetesConnectionMessage ||
+              'Connect Kubernetes in Settings to catch deployment and infra causes during an investigation.'}
+          </p>
+          <button className="primary-button" onClick={() => setActivePage('settings')}>
+            Configure Kubernetes <span>→</span>
+          </button>
+        </div>
+      )}
+    </section>
+
     <section className="section-heading">
                 <div>
                   <h2>Jenkins jobs</h2>
@@ -1445,8 +2140,8 @@ try {
               <div className="notice-box">
                 <span>ⓘ</span>
                 <p>
-                  <strong>Jenkins and GitHub have real backend connectors.</strong> Prometheus
-                  is the next integration to implement.
+                  <strong>Jenkins, GitHub, Prometheus, Grafana, Loki, SonarQube and Kubernetes all have real backend connectors.</strong>
+                  Connect each one here to replace placeholder data with live data.
                 </p>
               </div>
             </>
@@ -1580,61 +2275,79 @@ try {
             <h2 id="modal-title">Connect {selectedTool.name}</h2>
             <p className="modal-description">{selectedTool.description}</p>
 
-            <form onSubmit={saveConfiguration}>
-              {selectedTool.fields.map((field) => (
-                <label className="form-field" key={field.name}>
-                  <span>{field.label}</span>
-                  <input
-                    type={field.secret ? 'password' : 'text'}
-                    placeholder={field.placeholder}
-                    value={formValues[field.name] || ''}
-                    onChange={(event) => setFormValues((previous) => ({
-                      ...previous,
-                      [field.name]: event.target.value,
-                    }))}
-                    required
-                    autoComplete={field.secret ? 'new-password' : 'off'}
-                  />
-                </label>
-              ))}
+            {(() => {
+              const connectionState = {
+                jenkins: { status: connectionStatus, message: connectionMessage },
+                github: { status: githubConnectionStatus, message: githubConnectionMessage },
+                prometheus: { status: prometheusConnectionStatus, message: prometheusConnectionMessage },
+                grafana: { status: grafanaConnectionStatus, message: grafanaConnectionMessage },
+                loki: { status: lokiConnectionStatus, message: lokiConnectionMessage },
+                sonarqube: { status: sonarqubeConnectionStatus, message: sonarqubeConnectionMessage },
+                kubernetes: { status: kubernetesConnectionStatus, message: kubernetesConnectionMessage },
+              }[selectedIntegration] || { status: connectionStatus, message: connectionMessage }
 
-              {(selectedIntegration === 'github'
-                ? githubConnectionMessage
-                : selectedIntegration === 'prometheus'
-                  ? prometheusConnectionMessage
-                  : connectionMessage) && (
-                <div className={`form-feedback ${
-                  (selectedIntegration === 'github'
-                    ? githubConnectionStatus
-                    : selectedIntegration === 'prometheus'
-                      ? prometheusConnectionStatus
-                      : connectionStatus) === 'connected'
-                    ? 'feedback-success'
-                    : 'feedback-error'
-                }`}>
-                  {selectedIntegration === 'github'
-                    ? githubConnectionMessage
-                    : selectedIntegration === 'prometheus'
-                      ? prometheusConnectionMessage
-                      : connectionMessage}
-                </div>
-              )}
+              const noticeByIntegration = {
+                prometheus: 'PipeGuard queries the configured Prometheus HTTP API through its backend.',
+                grafana: 'PipeGuard queries the configured Grafana HTTP API through its backend.',
+                loki: 'PipeGuard queries the configured Loki HTTP API through its backend.',
+                sonarqube: 'PipeGuard queries the configured SonarQube Web API through its backend.',
+                kubernetes: 'PipeGuard queries the configured Kubernetes API server through its backend.',
+              }
 
-              <div className="form-notice">
-                <span>ⓘ</span>
-                {selectedIntegration === 'prometheus'
-                  ? 'PipeGuard queries the configured Prometheus HTTP API through its backend.'
-                  : 'Credentials are sent to the local PipeGuard backend and kept in memory only for this session.'}
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="secondary-button" onClick={() => setSelectedIntegration(null)} disabled={isConnecting}>
-                  Cancel
-                </button>
-                <button type="submit" className="primary-button" disabled={isConnecting}>
-                  {isConnecting ? 'Testing connection…' : 'Test and connect'}
-                </button>
-              </div>
-            </form>
+              return (
+                <form onSubmit={saveConfiguration}>
+                  {selectedTool.fields.map((field) => (
+                    <label className={field.type === 'checkbox' ? 'form-field form-field-checkbox' : 'form-field'} key={field.name}>
+                      <span>{field.label}</span>
+                      {field.type === 'checkbox' ? (
+                        <input
+                          type="checkbox"
+                          checked={formValues[field.name] ?? field.defaultValue ?? false}
+                          onChange={(event) => setFormValues((previous) => ({
+                            ...previous,
+                            [field.name]: event.target.checked,
+                          }))}
+                        />
+                      ) : (
+                        <input
+                          type={field.secret ? 'password' : 'text'}
+                          placeholder={field.placeholder}
+                          value={formValues[field.name] || ''}
+                          onChange={(event) => setFormValues((previous) => ({
+                            ...previous,
+                            [field.name]: event.target.value,
+                          }))}
+                          required
+                          autoComplete={field.secret ? 'new-password' : 'off'}
+                        />
+                      )}
+                    </label>
+                  ))}
+
+                  {connectionState.message && (
+                    <div className={`form-feedback ${
+                      connectionState.status === 'connected' ? 'feedback-success' : 'feedback-error'
+                    }`}>
+                      {connectionState.message}
+                    </div>
+                  )}
+
+                  <div className="form-notice">
+                    <span>ⓘ</span>
+                    {noticeByIntegration[selectedIntegration] ||
+                      'Credentials are sent to the local PipeGuard backend and kept in memory only for this session.'}
+                  </div>
+                  <div className="modal-actions">
+                    <button type="button" className="secondary-button" onClick={() => setSelectedIntegration(null)} disabled={isConnecting}>
+                      Cancel
+                    </button>
+                    <button type="submit" className="primary-button" disabled={isConnecting}>
+                      {isConnecting ? 'Testing connection…' : 'Test and connect'}
+                    </button>
+                  </div>
+                </form>
+              )
+            })()}
           </section>
         </div>
       )}
@@ -1978,6 +2691,164 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                 <p className="data-caption">All metrics are hidden. Select a metric above to display it.</p>
               )}
             </div>
+          </details>
+
+          <details className="investigation-section">
+            <summary>Grafana annotations around the build</summary>
+            <p className="data-caption">
+              Deploy markers and alert state changes recorded in Grafana during the same window.
+            </p>
+            {investigation.grafana?.status === 'success' ? (
+              (investigation.grafana.annotations || []).length > 0 ? (
+                <div className="jobs-table-wrap">
+                  <table className="jobs-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Text</th>
+                        <th>Tags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {investigation.grafana.annotations.map((annotation) => (
+                        <tr key={annotation.id}>
+                          <td>{formatTimestamp(annotation.time)}</td>
+                          <td>{annotation.text || '—'}</td>
+                          <td>{(annotation.tags || []).join(', ') || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="data-caption">No Grafana annotations were recorded in this build's time window.</p>
+              )
+            ) : (
+              <p className="provider-message">
+                {investigation.grafana?.message || 'Grafana evidence is not available yet.'}
+              </p>
+            )}
+          </details>
+
+          <details className="investigation-section">
+            <summary>Loki logs across services during the build</summary>
+            <p className="data-caption">
+              Log lines from every connected service in the same build time window, not just this Jenkins job's console log.
+            </p>
+            {investigation.loki?.status === 'success' ? (
+              (investigation.loki.lines || []).length > 0 ? (
+                <div className="jobs-table-wrap">
+                  <table className="jobs-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Labels</th>
+                        <th>Line</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {investigation.loki.lines.map((entry, index) => (
+                        <tr key={index}>
+                          <td>{formatTimestamp(entry.timestamp_ms)}</td>
+                          <td>{Object.entries(entry.labels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '—'}</td>
+                          <td>{entry.line || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="data-caption">No Loki log lines were found in this build's time window.</p>
+              )
+            ) : (
+              <p className="provider-message">
+                {investigation.loki?.message || 'Loki evidence is not available yet.'}
+              </p>
+            )}
+          </details>
+
+          <details className="investigation-section">
+            <summary>SonarQube issues on the project</summary>
+            <p className="data-caption">
+              Known code-quality and security issues recorded for the selected SonarQube project.
+            </p>
+            {investigation.sonarqube?.status === 'success' ? (
+              (investigation.sonarqube.issues || []).length > 0 ? (
+                <div className="jobs-table-wrap">
+                  <table className="jobs-table">
+                    <thead>
+                      <tr>
+                        <th>Severity</th>
+                        <th>Type</th>
+                        <th>Message</th>
+                        <th>Component</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {investigation.sonarqube.issues.map((issue) => (
+                        <tr key={issue.key}>
+                          <td>{issue.severity || '—'}</td>
+                          <td>{issue.type || '—'}</td>
+                          <td>{issue.message || '—'}</td>
+                          <td>{issue.component || '—'}{issue.line ? `:${issue.line}` : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="data-caption">No open SonarQube issues were found for this project.</p>
+              )
+            ) : (
+              <p className="provider-message">
+                {investigation.sonarqube?.message || 'SonarQube evidence is not available yet.'}
+              </p>
+            )}
+          </details>
+
+          <details className="investigation-section">
+            <summary>Kubernetes events around the build</summary>
+            <p className="data-caption">
+              Pod and deployment events recorded in the selected namespace during the same window.
+            </p>
+            {investigation.kubernetes?.status === 'success' ? (
+              (investigation.kubernetes.events || []).length > 0 ? (
+                <div className="jobs-table-wrap">
+                  <table className="jobs-table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Type</th>
+                        <th>Reason</th>
+                        <th>Object</th>
+                        <th>Message</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {investigation.kubernetes.events.map((event, index) => (
+                        <tr key={index}>
+                          <td>{formatTimestamp(event.time * 1000)}</td>
+                          <td>
+                            <span className={`provider-status ${event.type === 'Warning' ? 'error' : 'success'}`}>
+                              {event.type || '—'}
+                            </span>
+                          </td>
+                          <td>{event.reason || '—'}</td>
+                          <td>{event.involved_kind ? `${event.involved_kind}/${event.involved_name}` : '—'}</td>
+                          <td>{event.message || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="data-caption">No Kubernetes events were recorded in this namespace during the build's time window.</p>
+              )
+            ) : (
+              <p className="provider-message">
+                {investigation.kubernetes?.message || 'Kubernetes evidence is not available yet.'}
+              </p>
+            )}
           </details>
         </>
       )}

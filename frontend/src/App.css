@@ -718,6 +718,26 @@ p {
   color: #e66c3a;
 }
 
+.integration-icon.grafana {
+  background: #fff1e6;
+  color: #f46800;
+}
+
+.integration-icon.loki {
+  background: #f3e9ff;
+  color: #8a3cf2;
+}
+
+.integration-icon.sonarqube {
+  background: #e9f5ff;
+  color: #1a73c1;
+}
+
+.integration-icon.kubernetes {
+  background: #e8edfc;
+  color: #326ce5;
+}
+
 .connection-status {
   display: flex;
   align-items: center;
@@ -976,6 +996,19 @@ p {
 .form-field input:focus {
   border-color: #8c78ed;
   outline: 3px solid #eeeaff;
+}
+
+.form-field-checkbox {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.form-field-checkbox input {
+  width: 16px;
+  height: 16px;
 }
 
 .form-notice {
