@@ -10,14 +10,14 @@ import os
 import sys
 import threading
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from langgraph.types import Command
 
 from agent_system.orchestrator.graph import investigation_graph
 from agent_system.db import save_incident, get_incident, list_incidents
 from agent_system.agents.report_assembly import build_unified_report
-from agent_system.agents.confidence import summarize_confidence
-
+from agent_system.agents.confidence import summarize_confidence, judge_overall_score
 
 router = APIRouter(tags=["investigation"])
 logger = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ class InvestigateResponse(BaseModel):
     agent_confidence: dict[str, int | None] = Field(default_factory=dict)
     overall_confidence: int | None = None
     confidence_source: dict[str, str] = Field(default_factory=dict)
+    judge_verdict: str = ""
+    judge_scores: dict[str, int | None] = Field(default_factory=dict)
+    judge_historical_match_quality: int | None = None
+    judge_hallucination_detected: bool | None = None
+    judge_issues: list[str] = Field(default_factory=list)
+    judge_overall_score: int | None = None
     steps: list[dict[str, Any]] = Field(default_factory=list)
     engineer_id: str = ""
     source: str = ""
@@ -102,6 +108,11 @@ def investigate(request: InvestigateRequest, http_request: Request):
         "approval_status": "",
         "fix_result": {},
         "historical_incident": None,
+        "judge_verdict": "",
+        "judge_scores": {},
+        "judge_historical_match_quality": None,
+        "judge_hallucination_detected": None,
+        "judge_issues": [],
     }
 
     config = {
@@ -139,7 +150,13 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "agent_confidence": agent_confidence,
             "overall_confidence": overall_confidence,
             "confidence_source": confidence_source,
-            "schema_version": 3,
+            "judge_verdict": result.get("judge_verdict", ""),
+            "judge_scores": result.get("judge_scores", {}),
+            "judge_historical_match_quality": result.get("judge_historical_match_quality"),
+            "judge_hallucination_detected": result.get("judge_hallucination_detected"),
+            "judge_issues": result.get("judge_issues", []),
+            "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
+            "schema_version": 4,
             "engineer_id": request.engineer_id,
             "source": request.source,
             "incident_type": request.incident_type,
@@ -167,6 +184,12 @@ def investigate(request: InvestigateRequest, http_request: Request):
             agent_confidence=agent_confidence,
             overall_confidence=overall_confidence,
             confidence_source=confidence_source,
+            judge_verdict=result.get("judge_verdict", ""),
+            judge_scores=result.get("judge_scores", {}),
+            judge_historical_match_quality=result.get("judge_historical_match_quality"),
+            judge_hallucination_detected=result.get("judge_hallucination_detected"),
+            judge_issues=result.get("judge_issues", []),
+            judge_overall_score=judge_overall_score(result.get("judge_scores") or {}),
             steps=result.get("steps", []),
             engineer_id=request.engineer_id,
             source=request.source,
@@ -314,6 +337,136 @@ def get_incident_by_id(incident_id: str):
         )
         raise
 
+
+@router.post("/api/investigate/stream")
+def investigate_stream(request: InvestigateRequest, http_request: Request):
+    """Same pipeline as /api/investigate, but streams a Server-Sent Event per
+    node as it completes, so the frontend can show live step-by-step
+    progress instead of one long silent wait."""
+    incident_id = str(uuid.uuid4())
+
+    initial_state = {
+        "incident_id": incident_id,
+        "job_name": request.job_name,
+        "build_number": request.build_number,
+        "jenkins_url": request.jenkins_url,
+        "jenkins_username": request.jenkins_username,
+        "jenkins_api_token": request.jenkins_api_token,
+        "evidence": request.evidence,
+        "github_token": request.github_token,
+        "github_owner": request.github_owner,
+        "github_repo": request.github_repo,
+        "engineer_id": request.engineer_id,
+        "source": request.source,
+        "incident_type": request.incident_type,
+        "steps": [],
+        "monitoring_report": "",
+        "diagnosis_report": "",
+        "remediation_report": "",
+        "approval_status": "",
+        "fix_result": {},
+        "historical_incident": None,
+        "judge_verdict": "",
+        "judge_scores": {},
+        "judge_historical_match_quality": None,
+        "judge_hallucination_detected": None,
+        "judge_issues": [],
+    }
+
+    config = {
+        "configurable": {"thread_id": incident_id},
+        "recursion_limit": 30,
+    }
+
+    def event_stream():
+        node_started_at = time.perf_counter()
+        try:
+            for update in investigation_graph.stream(initial_state, config=config, stream_mode="updates"):
+                for node_name in update:
+                    if node_name == "__interrupt__":
+                        continue  # expected: graph pauses at human_approval
+                    elapsed_ms = int((time.perf_counter() - node_started_at) * 1000)
+                    node_started_at = time.perf_counter()
+                    logger.info(
+                        "INVESTIGATION_TRACE node_complete incident_id=%s node=%s elapsed_ms=%s",
+                        incident_id, node_name, elapsed_ms,
+                    )
+                    yield f"data: {json.dumps({'type': 'node_complete', 'node': node_name, 'elapsed_ms': elapsed_ms})}\n\n"
+
+            # Graph paused at human_approval (interrupt) — fetch the
+            # authoritative merged state, same call the decide() endpoint
+            # already uses.
+            graph_state = investigation_graph.get_state(config)
+            result = graph_state.values
+
+            historical_incident = result.get("historical_incident")
+            agent_confidence, overall_confidence = summarize_confidence(result)
+            confidence_source = {"monitoring": result.get("monitoring_confidence_source") or "agent"}
+            unified_report = build_unified_report({**result, "historical_incident": historical_incident})
+
+            incident_document = {
+                "_id": incident_id,
+                "job_name": request.job_name,
+                "build_number": request.build_number,
+                "evidence": request.evidence,
+                "monitoring_report": result.get("monitoring_report", ""),
+                "diagnosis_report": result.get("diagnosis_report", ""),
+                "remediation_report": result.get("remediation_report", ""),
+                "unified_report": unified_report,
+                "historical_incident": historical_incident,
+                "agent_confidence": agent_confidence,
+                "overall_confidence": overall_confidence,
+                "confidence_source": confidence_source,
+                "judge_verdict": result.get("judge_verdict", ""),
+                "judge_scores": result.get("judge_scores", {}),
+                "judge_historical_match_quality": result.get("judge_historical_match_quality"),
+                "judge_hallucination_detected": result.get("judge_hallucination_detected"),
+                "judge_issues": result.get("judge_issues", []),
+                "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
+                "schema_version": 4,
+                "engineer_id": request.engineer_id,
+                "source": request.source,
+                "incident_type": request.incident_type,
+                "steps": result.get("steps", []),
+                "solved_step_id": None,
+                "status": "awaiting_approval",
+                "decision": None,
+                "fix_result": None,
+                "created_at": _now(),
+                "updated_at": _now(),
+            }
+            save_incident(incident_document)
+
+            payload = {
+                "incident_id": incident_id,
+                "job_name": request.job_name,
+                "build_number": request.build_number,
+                "status": "awaiting_approval",
+                "monitoring_report": result.get("monitoring_report", ""),
+                "diagnosis_report": result.get("diagnosis_report", ""),
+                "remediation_report": result.get("remediation_report", ""),
+                "unified_report": unified_report,
+                "historical_incident": historical_incident,
+                "agent_confidence": agent_confidence,
+                "overall_confidence": overall_confidence,
+                "confidence_source": confidence_source,
+                "judge_verdict": result.get("judge_verdict", ""),
+                "judge_scores": result.get("judge_scores", {}),
+                "judge_historical_match_quality": result.get("judge_historical_match_quality"),
+                "judge_hallucination_detected": result.get("judge_hallucination_detected"),
+                "judge_issues": result.get("judge_issues", []),
+                "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
+                "steps": result.get("steps", []),
+                "engineer_id": request.engineer_id,
+                "source": request.source,
+            }
+            yield f"data: {json.dumps({'type': 'complete', 'data': payload})}\n\n"
+
+        except Exception as exc:
+            logger.exception("Streaming investigation failed: incident_id=%s", incident_id)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 class FeedbackRequest(BaseModel):
     build_passed: bool = False

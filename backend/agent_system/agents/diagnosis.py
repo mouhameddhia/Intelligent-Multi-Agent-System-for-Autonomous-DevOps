@@ -105,7 +105,7 @@ FORMAT RULES:
 
     report, match_id = extract_historical_match_id(report)
     report, confidence = extract_agent_confidence(report)
-    historical_incident = resolve_historical_match(match_id)
+    historical_incident = resolve_historical_match(match_id, evidence)
     return {
         **state,
         "diagnosis_report": report,

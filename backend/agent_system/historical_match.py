@@ -145,12 +145,21 @@ def get_candidate_incidents(
         return []
 
 
-def resolve_historical_match(incident_id: str | None) -> dict[str, Any] | None:
+def resolve_historical_match(
+    incident_id: str | None,
+    current_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Given an incident_id the Diagnosis agent CLAIMS matches, re-fetch the
     FULL record from Mongo and reshape it with _resolution(). This is the only
     place an LLM-claimed match becomes a trusted, schema-conformant
     historical_incident — the agent's own paraphrase is never stored or
-    passed to Remediation directly."""
+    passed to Remediation directly.
+
+    If current_evidence is supplied, also recomputes exact_signature_match
+    deterministically (same signature logic the candidate search used), so
+    downstream consumers — including the judge — can verify a claim like
+    "exact_signature_match: true" against something real, instead of that
+    detail only existing transiently inside Diagnosis's tool output."""
     if not incident_id:
         return None
     from .db import get_incident  # local: avoid import-time cycles
@@ -158,9 +167,18 @@ def resolve_historical_match(incident_id: str | None) -> dict[str, Any] | None:
         doc = get_incident(incident_id)
         if not isinstance(doc, dict):
             return None
-        return _resolution(doc)
+        resolved = _resolution(doc)
+        if resolved is None:
+            return None
+        if current_evidence is not None:
+            current_sig = _signature(current_evidence or {})
+            matched_sig = _signature(doc.get("evidence") or {})
+            resolved["exact_signature_match"] = current_sig is not None and current_sig == matched_sig
+        return resolved
     except Exception:
         return None
+
+
 def find_related_historical_incident(current_evidence: dict[str, Any], incidents: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Newest exact normalized test identifier + assertion match with recorded actions."""
     current = _signature(current_evidence or {})

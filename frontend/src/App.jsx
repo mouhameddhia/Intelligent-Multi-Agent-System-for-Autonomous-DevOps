@@ -109,38 +109,30 @@ function App() {
   const [activeInvestigationStage, setActiveInvestigationStage] = useState(0)
 
   async function investigateBuild(job) {
+    if (isInvestigating) return
+  
     const buildNumber = job.last_build?.number
     if (!jenkinsCredentials || !buildNumber) return
-    
-
+  
     const traceId =
-      typeof crypto !== "undefined" && crypto.randomUUID
+      typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
-        : `investigate-${Date.now()}`;
-
-    const traceStartedAt = performance.now();
-
+        : `investigate-${Date.now()}`
+  
+    const traceStartedAt = performance.now()
+  
     const trace = (step, details = {}) => {
-      console.log("[INVESTIGATION_TRACE]", {
+      console.log('[INVESTIGATION_TRACE]', {
         traceId,
         step,
         timestamp: new Date().toISOString(),
         elapsedMs: Math.round(performance.now() - traceStartedAt),
         ...details,
-      });
-    };
-
-    trace("investigation_started", {
-      jobName: job.name,
-      buildNumber,
-    });
-
-
-
-
-
-
-
+      })
+    }
+  
+    trace('investigation_started', { jobName: job.name, buildNumber })
+  
     setIsInvestigating(true)
     setActiveInvestigationStage(0)
     setIsInvestigationModalOpen(true)
@@ -153,8 +145,10 @@ function App() {
       agentStatus: 'waiting',
       agentReports: null,
       agentError: '',
+      nodeProgress: [],
+      currentNode: null,
     })
-
+  
     async function postJson(path, body) {
       const response = await fetch(`${API_URL}${path}`, {
         method: 'POST',
@@ -167,7 +161,7 @@ function App() {
       }
       return data
     }
-
+  
     try {
       // First retrieve the selected build itself; never substitute another build.
       const evidenceData = await postJson('/api/jenkins/build-evidence', {
@@ -179,7 +173,7 @@ function App() {
       const shaFromJenkins = evidence.commits?.find((item) => item.sha)?.sha
       const shaFromLog = evidence.console_log?.match(/\b[0-9a-f]{40}\b/i)?.[0]
       const sha = shaFromJenkins || shaFromLog || null
-
+  
       setInvestigation({
         jobName: job.name,
         buildNumber,
@@ -187,14 +181,14 @@ function App() {
         github: { status: 'loading', sha },
         metrics: [],
       })
-
+  
       // GitHub lookup is tied to the exact commit SHA found in this build.
       let github = {
         status: 'not_configured',
         message: 'Connect GitHub and select the repository containing this commit.',
         sha,
       }
-
+  
       if (!githubToken) {
         github = { ...github, status: 'not_configured' }
       } else if (!selectedGithubRepo) {
@@ -218,7 +212,7 @@ function App() {
           github = { status: 'error', sha, message: error.message }
         }
       }
-
+  
       // Query real Prometheus samples around this build's start/end timestamps.
       let metrics = []
       if (!prometheusUrl) {
@@ -235,16 +229,14 @@ function App() {
         }]
       } else {
         const start = Math.floor(evidence.timestamp / 1000) - 300
-        const end = Math.ceil(
-          (evidence.timestamp + (evidence.duration_ms || 0)) / 1000,
-        ) + 300
+        const end = Math.ceil((evidence.timestamp + (evidence.duration_ms || 0)) / 1000) + 300
         const expressions = [
           'up',
           'node_load1',
           'node_memory_MemAvailable_bytes',
           'rate(node_cpu_seconds_total{mode!="idle"}[5m])',
         ]
-
+  
         metrics = await Promise.all(expressions.map(async (query) => {
           try {
             const result = await postJson('/api/prometheus/query-range', {
@@ -267,10 +259,10 @@ function App() {
           }
         }))
       }
-
+  
       // Live provider evidence is complete; now request the real agent workflow.
       setActiveInvestigationStage(1)
-
+  
       // Preserve the provider evidence in the UI and pass a bounded evidence
       // bundle to the agents. Provider credentials are deliberately not sent.
       setInvestigation({
@@ -282,8 +274,10 @@ function App() {
         agentStatus: 'running',
         agentReports: null,
         agentError: '',
+        nodeProgress: [],
+        currentNode: null,
       })
-
+  
       const agentEvidence = {
         jenkins: {
           ...evidence,
@@ -298,343 +292,217 @@ function App() {
           results: (metric.results || []).slice(0, 5),
         })),
       }
-
-      
-      
-const debugId =
-  typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `investigate-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-
-const debugStartedAt = performance.now();
-
-const debugLog = (step, details = {}) => {
-  console.log(`[INVESTIGATION_TRACE] ${step}`, {
-    requestId: debugId,
-    timestamp: new Date().toISOString(),
-    elapsedMs: Math.round(performance.now() - debugStartedAt),
-    ...details,
-  });
-};
-
-let debugTimeoutId;
-let timeoutTriggered = false;
-let requestBody;
-
-try {
-  debugLog("STEP 1: Investigation handler entered", {
-    jobName: job.name,
-    buildNumber,
-  });
-
-  // --------------------------------------------------
-  // STEP 2: Prepare payload
-  // --------------------------------------------------
-  const [githubOwner, githubRepoName] =
-    (selectedGithubRepo || "").split("/");
-
-  const payload = {
-    job_name: job.name,
-    build_number: buildNumber,
-    evidence: agentEvidence,
-    github_token: githubToken || "",
-    github_owner: githubOwner || "",
-    github_repo: githubRepoName || "",
-  };
-
-  debugLog("STEP 2: Payload prepared", {
-    jobName: job.name,
-    buildNumber,
-    evidenceType: typeof agentEvidence,
-    evidenceKeys:
-      agentEvidence &&
-      typeof agentEvidence === "object"
-        ? Object.keys(agentEvidence)
-        : [],
-    evidenceStringLength:
-      typeof agentEvidence === "string"
-        ? agentEvidence.length
-        : null,
-    hasGithubToken: Boolean(githubToken),
-    githubOwner: githubOwner || "(empty)",
-    githubRepo: githubRepoName || "(empty)",
-  });
-
-  // --------------------------------------------------
-  // STEP 3: Serialize payload and measure its size
-  // --------------------------------------------------
-  debugLog("STEP 3: Payload serialization started");
-
-  const serializationStartedAt = performance.now();
-
-  requestBody = JSON.stringify(payload);
-
-  const payloadBytes = new TextEncoder().encode(requestBody).length;
-
-  debugLog("STEP 3: Payload serialization completed", {
-    serializationMs: Math.round(
-      performance.now() - serializationStartedAt
-    ),
-    payloadBytes,
-    payloadCharacters: requestBody.length,
-  });
-
-  // --------------------------------------------------
-  // STEP 4: Start request and timeout
-  // --------------------------------------------------
-  const url = `${AGENT_API_URL}/api/investigate`;
-  const controller = new AbortController();
-
-  debugLog("STEP 4: Starting fetch", {
-    url,
-    timeoutMs: 90000,
-  });
-
-  debugTimeoutId = setTimeout(() => {
-    timeoutTriggered = true;
-
-    debugLog("TIMEOUT: 90 seconds elapsed; aborting frontend fetch", {
-      note:
-        "This does not guarantee cancellation of backend processing.",
-    });
-
-    controller.abort();
-  }, 90000);
-
-  // --------------------------------------------------
-  // STEP 5: Receive response headers
-  // --------------------------------------------------
-  let agentResponse;
-
-  try {
-    agentResponse = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Request-ID": debugId,
-      },
-      body: requestBody,
-      signal: controller.signal,
-    });
-
-    debugLog("STEP 5: Response headers received", {
-      status: agentResponse.status,
-      statusText: agentResponse.statusText,
-      ok: agentResponse.ok,
-      contentType: agentResponse.headers.get("content-type"),
-      serverRequestId:
-        agentResponse.headers.get("X-Request-ID"),
-    });
-  } catch (fetchError) {
-    debugLog("STEP 5 ERROR: Fetch failed before response headers", {
-      name: fetchError.name,
-      message: fetchError.message,
-      aborted: fetchError.name === "AbortError",
-      timeoutTriggered,
-    });
-
-    throw fetchError;
-  }
-
-  // Do not clear the timeout yet: reading the body can also hang.
-  // Keep the timeout active until response processing finishes.
-
-  // --------------------------------------------------
-  // STEP 6: Read response body
-  // --------------------------------------------------
-  debugLog("STEP 6: Reading response body started");
-
-  let responseText;
-
-  try {
-    responseText = await agentResponse.text();
-
-    debugLog("STEP 6: Response body received", {
-      bodyLength: responseText.length,
-      bodyPreview: responseText.slice(0, 1000),
-    });
-  } catch (bodyError) {
-    debugLog("STEP 6 ERROR: Failed to read response body", {
-      name: bodyError.name,
-      message: bodyError.message,
-      aborted: bodyError.name === "AbortError",
-      timeoutTriggered,
-    });
-
-    throw bodyError;
-  }
-
-  // --------------------------------------------------
-  // STEP 7: Parse JSON
-  // --------------------------------------------------
-  let agentData;
-
-  try {
-    debugLog("STEP 7: JSON parsing started");
-
-    agentData = responseText
-      ? JSON.parse(responseText)
-      : {};
-
-    debugLog("STEP 7: JSON parsing succeeded", {
-      responseKeys:
-        agentData && typeof agentData === "object"
-          ? Object.keys(agentData)
-          : [],
-    });
-  } catch (parseError) {
-    debugLog("STEP 7 ERROR: JSON parsing failed", {
-      name: parseError.name,
-      message: parseError.message,
-      httpStatus: agentResponse.status,
-    });
-
-    throw new Error(
-      `Agent API returned invalid JSON (HTTP ${agentResponse.status}): ` +
-        responseText.slice(0, 300)
-    );
-  }
-
-  // --------------------------------------------------
-  // STEP 8: Check HTTP status
-  // --------------------------------------------------
-  if (!agentResponse.ok) {
-    debugLog("STEP 8 ERROR: HTTP request returned an error", {
-      status: agentResponse.status,
-      detail: agentData.detail,
-    });
-
-    throw new Error(
-      agentData.detail ||
-        `Agent API failed (HTTP ${agentResponse.status})`
-    );
-  }
-
-  debugLog("STEP 8: Investigation response validated", {
-    incidentId: agentData.incident_id,
-    decisionStatus: agentData.status,
-    stepsCount: Array.isArray(agentData.steps)
-      ? agentData.steps.length
-      : 0,
-  });
-
-  // --------------------------------------------------
-  // STEP 9: Update investigation stage and state
-  // --------------------------------------------------
-  debugLog("STEP 9: Updating investigation stage");
-
-  setActiveInvestigationStage(2);
-
-  debugLog("STEP 9: Scheduling investigation state update");
-
-  setInvestigation((current) => {
-    if (
-      !current ||
-      current.jobName !== job.name ||
-      current.buildNumber !== buildNumber
-    ) {
-      debugLog("STEP 9: State update skipped; investigation mismatch", {
-        currentJobName: current?.jobName,
-        currentBuildNumber: current?.buildNumber,
-      });
-
-      return current;
+  
+      const debugId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `investigate-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  
+      const debugStartedAt = performance.now()
+  
+      const debugLog = (step, details = {}) => {
+        console.log(`[INVESTIGATION_TRACE] ${step}`, {
+          requestId: debugId,
+          timestamp: new Date().toISOString(),
+          elapsedMs: Math.round(performance.now() - debugStartedAt),
+          ...details,
+        })
+      }
+  
+      try {
+        debugLog('STEP 1: Investigation handler entered', { jobName: job.name, buildNumber })
+  
+        const [githubOwner, githubRepoName] = (selectedGithubRepo || '').split('/')
+  
+        const payload = {
+          job_name: job.name,
+          build_number: buildNumber,
+          evidence: agentEvidence,
+          github_token: githubToken || '',
+          github_owner: githubOwner || '',
+          github_repo: githubRepoName || '',
+        }
+  
+        debugLog('STEP 2: Payload prepared', {
+          jobName: job.name,
+          buildNumber,
+          evidenceKeys: agentEvidence && typeof agentEvidence === 'object' ? Object.keys(agentEvidence) : [],
+          hasGithubToken: Boolean(githubToken),
+          githubOwner: githubOwner || '(empty)',
+          githubRepo: githubRepoName || '(empty)',
+        })
+  
+        const requestBody = JSON.stringify(payload)
+        const payloadBytes = new TextEncoder().encode(requestBody).length
+  
+        debugLog('STEP 3: Payload serialized', { payloadBytes })
+  
+        const url = `${AGENT_API_URL}/api/investigate/stream`
+  
+        debugLog('STEP 4: Starting stream request', { url })
+  
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': debugId,
+          },
+          body: requestBody,
+        })
+  
+        debugLog('STEP 5: Response headers received', {
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          contentType: response.headers.get('content-type'),
+        })
+  
+        if (!response.ok || !response.body) {
+          const text = await response.text().catch(() => '')
+          throw new Error(`Agent API failed to start stream (HTTP ${response.status}): ${text.slice(0, 300)}`)
+        }
+  
+        debugLog('STEP 6: Reading event stream')
+  
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let finalPayload = null
+  
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+  
+          let boundary
+          while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+            const rawEvent = buffer.slice(0, boundary)
+            buffer = buffer.slice(boundary + 2)
+            const line = rawEvent.replace(/^data:\s*/, '')
+            if (!line.trim()) continue
+  
+            let event
+            try {
+              event = JSON.parse(line)
+            } catch (parseError) {
+              debugLog('STEP 6 WARNING: Could not parse SSE event', { line: line.slice(0, 200) })
+              continue
+            }
+  
+            debugLog(`SSE event: ${event.type}`, event)
+  
+            if (event.type === 'node_complete') {
+              setInvestigation((current) => current ? {
+                ...current,
+                currentNode: event.node,
+                nodeProgress: [...(current.nodeProgress || []), { node: event.node, elapsedMs: event.elapsed_ms }],
+              } : current)
+            } else if (event.type === 'complete') {
+              finalPayload = event.data
+            } else if (event.type === 'error') {
+              throw new Error(event.message || 'Agent workflow failed.')
+            }
+          }
+        }
+  
+        if (!finalPayload) {
+          throw new Error('Stream ended without a completed result.')
+        }
+  
+        debugLog('STEP 7: Stream complete', {
+          incidentId: finalPayload.incident_id,
+          decisionStatus: finalPayload.status,
+          stepsCount: Array.isArray(finalPayload.steps) ? finalPayload.steps.length : 0,
+        })
+  
+        setActiveInvestigationStage(2)
+  
+        setInvestigation((current) => {
+          if (!current || current.jobName !== job.name || current.buildNumber !== buildNumber) {
+            debugLog('STEP 8: State update skipped; investigation mismatch', {
+              currentJobName: current?.jobName,
+              currentBuildNumber: current?.buildNumber,
+            })
+            return current
+          }
+  
+          return {
+            ...current,
+            agentStatus: 'complete',
+            incidentId: finalPayload.incident_id,
+            steps: finalPayload.steps || [],
+            decisionStatus: finalPayload.status,
+            agentReports: {
+              unified: finalPayload.unified_report,
+              monitoring: finalPayload.monitoring_report,
+              diagnosis: finalPayload.diagnosis_report,
+              remediation: finalPayload.remediation_report,
+              confidence: finalPayload.agent_confidence || {},
+              confidenceSource: finalPayload.confidence_source || {},
+              overallConfidence: finalPayload.overall_confidence ?? null,
+              historicalIncident: finalPayload.historical_incident ?? null,
+              proposedSteps: finalPayload.steps || [],
+              judgeVerdict: finalPayload.judge_verdict || '',
+              judgeScores: finalPayload.judge_scores || {},
+              judgeHistoricalMatchQuality: finalPayload.judge_historical_match_quality ?? null,
+              judgeHallucinationDetected: finalPayload.judge_hallucination_detected ?? null,
+              judgeIssues: finalPayload.judge_issues || [],
+              judgeOverallScore: finalPayload.judge_overall_score ?? null,
+            },
+            agentError: '',
+          }
+        })
+  
+        debugLog('STEP 9: Investigation response processed successfully')
+      } catch (agentError) {
+        debugLog('INVESTIGATION ERROR', {
+          name: agentError?.name,
+          message: agentError?.message,
+          stack: agentError?.stack,
+        })
+  
+        setActiveInvestigationStage(2)
+  
+        setInvestigation((current) => {
+          if (!current || current.jobName !== job.name || current.buildNumber !== buildNumber) {
+            debugLog('ERROR STATE UPDATE SKIPPED: Investigation mismatch')
+            return current
+          }
+  
+          return {
+            ...current,
+            agentStatus: 'error',
+            agentError: agentError?.message || 'Agent investigation failed.',
+          }
+        })
+      }
+    } catch (error) {
+      // This catch belongs to the outer try that retrieves Jenkins evidence
+      // and gathers GitHub/Prometheus data.
+      console.error('[INVESTIGATION_TRACE] Build evidence preparation failed', {
+        jobName: job.name,
+        buildNumber,
+        name: error?.name,
+        message: error?.message,
+        timestamp: new Date().toISOString(),
+      })
+  
+      setActiveInvestigationStage(2)
+  
+      setInvestigation((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          agentStatus: 'error',
+          agentError: error?.message || "Could not retrieve this build's evidence.",
+        }
+      })
+    } finally {
+      // Always release the loading state, including when Jenkins or
+      // Prometheus fails before the agent request starts.
+      setIsInvestigating(false)
     }
-
-    return {
-      ...current,
-      agentStatus: "complete",
-      incidentId: agentData.incident_id,
-      steps: agentData.steps || [],
-      decisionStatus: agentData.status,
-      agentReports: {
-        unified: agentData.unified_report,
-        monitoring: agentData.monitoring_report,
-        diagnosis: agentData.diagnosis_report,
-        remediation: agentData.remediation_report,
-        confidence: agentData.agent_confidence || {},
-        confidenceSource: agentData.confidence_source || {},
-        overallConfidence:
-          agentData.overall_confidence ?? null,
-        historicalIncident:
-          agentData.historical_incident ?? null,
-        proposedSteps: agentData.steps || [],
-      },
-      agentError: "",
-    };
-  });
-
-  debugLog("STEP 10: Investigation response processed successfully");
-} catch (agentError) {
-  debugLog("INVESTIGATION ERROR", {
-    name: agentError?.name,
-    message: agentError?.message,
-    stack: agentError?.stack,
-    aborted: agentError?.name === "AbortError",
-    timeoutTriggered,
-  });
-
-  setActiveInvestigationStage(2);
-
-  setInvestigation((current) => {
-    if (
-      !current ||
-      current.jobName !== job.name ||
-      current.buildNumber !== buildNumber
-    ) {
-      debugLog("ERROR STATE UPDATE SKIPPED: Investigation mismatch");
-      return current;
-    }
-
-    return {
-      ...current,
-      agentStatus: "error",
-      agentError:
-        agentError?.name === "AbortError" || timeoutTriggered
-          ? "Investigation request timed out or was aborted. Check backend logs."
-          : agentError?.message || "Agent investigation failed.",
-    };
-  });
-} finally {
-    clearTimeout(debugTimeoutId);
-
-    debugLog("STEP 11: Investigation handler finished", {
-      timeoutTriggered,
-      totalElapsedMs: Math.round(
-        performance.now() - debugStartedAt
-      ),
-    });
   }
-
-  // This catch belongs to the OUTER try that retrieves Jenkins evidence
-  // and gathers GitHub/Prometheus data.
-  } catch (error) {
-    console.error("[INVESTIGATION_TRACE] Build evidence preparation failed", {
-      jobName: job.name,
-      buildNumber,
-      name: error?.name,
-      message: error?.message,
-      timestamp: new Date().toISOString(),
-    });
-
-    setActiveInvestigationStage(2);
-
-    setInvestigation((current) => {
-      if (!current) return current;
-
-      return {
-        ...current,
-        agentStatus: "error",
-        agentError:
-          error?.message || "Could not retrieve this build's evidence.",
-      };
-    });
-  } finally {
-    // Always release the loading state, including when Jenkins or
-    // Prometheus fails before the agent request starts.
-    setIsInvestigating(false);
-  }
-  } // End of investigateBuild()
 
   async function submitFeedback(feedback) {
 
@@ -1288,7 +1156,7 @@ try {
               </section>
 
               {jenkinsCredentials ? (
-                <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} />
+                <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} investigationInProgress={isInvestigating} />
               ) : (
                 <div className="empty-state">
                   <div className="empty-state-icon">⑂</div>
@@ -1465,7 +1333,7 @@ try {
                 </button>
               </section>
               {jenkinsCredentials
-                ? <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} />
+                ? <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} investigationInProgress={isInvestigating} />
                 : <div className="empty-state">
                     <strong>No provider data yet</strong>
                     <p>Connect Jenkins to load jobs from your server.</p>
@@ -1653,7 +1521,7 @@ function MetricCard({ label, value, note, icon, tone }) {
   )
 }
 
-function JobsTable({ jobs, onInvestigate }) {
+function JobsTable({ jobs, onInvestigate, investigationInProgress }) {
   if (!jobs.length) {
     return (
       <div className="empty-state">
@@ -1700,9 +1568,9 @@ function JobsTable({ jobs, onInvestigate }) {
                     <button
                       className="investigate-button"
                       onClick={() => onInvestigate?.(job)}
-                      disabled={!onInvestigate}
+                      disabled={!onInvestigate || investigationInProgress}
                     >
-                      Investigate #{job.last_build.number} →
+                      {investigationInProgress ? 'Investigation running…' : `Investigate #${job.last_build.number} →`}
                     </button>
                   ) : (
                     <span className="data-caption">Failure only</span>
@@ -2034,52 +1902,44 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
 
             <div className="agent-workflow-track">
               {[
-                {
-                  name: 'Monitoring',
-                  detail: 'Collect and summarize evidence',
-                  number: '01',
-                },
-                {
-                  name: 'Diagnosis',
-                  detail: 'Identify likely causes',
-                  number: '02',
-                },
-                {
-                  name: 'Remediation',
-                  detail: 'Prepare a reviewable fix',
-                  number: '03',
-                },
-              ].map((stage, index) => (
-                <div
-                  className={`agent-workflow-stage ${
-                    investigation.agentStatus === 'complete' ? 'stage-complete' : ''
-                  }`}
-                  key={stage.name}
-                >
-                  <div className="agent-stage-marker">
-                    {investigation.agentStatus === 'complete' ? '✓' : stage.number}
+                { key: 'monitoring', name: 'Monitoring', detail: 'Collect and summarize evidence' },
+                { key: 'diagnosis', name: 'Diagnosis', detail: 'Identify likely causes' },
+                { key: 'remediation', name: 'Remediation', detail: 'Prepare a reviewable fix' },
+                { key: 'structure_steps', name: 'Structuring', detail: 'Turn the proposal into steps' },
+                { key: 'llm_judge', name: 'Audit', detail: 'Independent check against evidence' },
+              ].map((stage, index, all) => {
+                const completedEntry = (investigation.nodeProgress || []).find((p) => p.node === stage.key)
+                const isCurrent = investigation.currentNode === stage.key && !completedEntry
+                const isDone = Boolean(completedEntry) || investigation.agentStatus === 'complete'
+                return (
+                  <div
+                    className={`agent-workflow-stage ${isDone ? 'stage-complete' : isCurrent ? 'stage-active' : ''}`}
+                    key={stage.key}
+                  >
+                    <div className="agent-stage-marker">
+                      {isDone ? '✓' : isCurrent ? '⏳' : String(index + 1).padStart(2, '0')}
+                    </div>
+                    <div className="agent-stage-copy">
+                      <strong>{stage.name}</strong>
+                      <span>
+                        {stage.detail}
+                        {completedEntry ? ` · ${completedEntry.elapsedMs}ms` : ''}
+                      </span>
+                    </div>
+                    {index < all.length - 1 && <div className="agent-stage-connector" />}
                   </div>
-                  <div className="agent-stage-copy">
-                    <strong>{stage.name}</strong>
-                    <span>{stage.detail}</span>
-                  </div>
-                  {index < 2 && <div className="agent-stage-connector" />}
-                </div>
-              ))}
+                )
+              })}
             </div>
-
-            {investigation.agentStatus === 'running' && (
-              <div className="agent-workflow-progress" aria-label="Investigation in progress">
-                <span />
-              </div>
-            )}
 
             <p className="agent-workflow-footnote">
               {investigation.agentStatus === 'complete'
                 ? 'Reports are ready. Review the diagnosis and proposed actions before making changes.'
                 : investigation.agentStatus === 'error'
                   ? 'The agent workflow did not return a complete set of reports. Your collected build evidence remains available above.'
-                  : 'The API returns the agent reports together when the workflow finishes; individual live stage updates are not available.'}
+                  : investigation.currentNode
+                    ? `Currently running: ${investigation.currentNode}…`
+                    : 'Starting the agent workflow…'}
             </p>
           </div>
           )}
@@ -2140,6 +2000,9 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                           ['Monitoring', score('monitoring')],
                           ['Diagnosis', score('diagnosis')],
                           ['Remediation', score('remediation')],
+                          ['Judge', typeof reports.judgeOverallScore === 'number'
+                            ? `${reports.judgeOverallScore}%`
+                            : 'N/A'],
                           ['Overall', typeof reports.overallConfidence === 'number'
                             ? `${reports.overallConfidence}%`
                             : 'N/A'],
@@ -2149,9 +2012,11 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                             key={label}
                             title={label === 'Monitoring' && reports.confidenceSource?.monitoring === 'evidence_coverage'
                               ? 'Computed from evidence coverage: the agent did not return a score.'
-                              : label === 'Overall'
-                                ? 'Mean of the scores that are available.'
-                                : undefined}
+                              : label === 'Judge'
+                                ? 'Independent audit score, averaged from the judge’s per-agent ratings.'
+                                : label === 'Overall'
+                                  ? 'Mean of the scores that are available.'
+                                  : undefined}
                           >
                             <span>{label}</span>
                             <strong>{value}</strong>
@@ -2249,6 +2114,8 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                       </section>
                     )}
 
+                    
+
                     <section className="pg-report-panel pg-remediation-panel">
                       <div className="pg-panel-kicker">04 · PROPOSED RESPONSE</div>
                       <h4>Remediation</h4>
@@ -2268,6 +2135,51 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                         <div className="agent-report-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{reports.remediation}</ReactMarkdown></div>
                       ) : <p className="pg-empty-state">No remediation steps were returned.</p>}
                     </section>
+
+                    {typeof reports.judgeOverallScore === 'number' && (
+                      <section
+                        className={`pg-report-panel pg-judge-panel ${
+                          reports.judgeHallucinationDetected === false && (reports.judgeIssues || []).length === 0
+                            ? 'judge-clean'
+                            : 'judge-warning'
+                        }`}
+                      >
+                        <div className="pg-panel-kicker">05 · INDEPENDENT AUDIT</div>
+                        <h4>Judge score</h4>
+                        <div className="pg-judge-score">{reports.judgeOverallScore}%</div>
+                        <p className="pg-judge-headline">
+                          {reports.judgeHallucinationDetected === false && (reports.judgeIssues || []).length === 0
+                            ? 'Looks solid — no hallucination, claims check out against the evidence.'
+                            : 'Worth a second look before approving.'}
+                        </p>
+                        <div className="pg-summary-fields">
+                          {Object.entries(reports.judgeScores || {}).length > 0 && (
+                            <div className="pg-summary-field">
+                              <strong>Per-agent scores</strong>
+                              <p>
+                                {Object.entries(reports.judgeScores).map(([name, score]) => (
+                                  score !== null ? `${name[0].toUpperCase()}${name.slice(1)} (${score}%)` : null
+                                )).filter(Boolean).join(' · ')}
+                              </p>
+                            </div>
+                          )}
+                          {typeof reports.judgeHistoricalMatchQuality === 'number' && (
+                            <div className="pg-summary-field">
+                              <strong>Historical match quality</strong>
+                              <p>{reports.judgeHistoricalMatchQuality}%</p>
+                            </div>
+                          )}
+                          {(reports.judgeIssues || []).length > 0 && (
+                            <div className="pg-summary-field">
+                              <strong>Flagged issues</strong>
+                              <ul className="pg-historical-actions">
+                                {reports.judgeIssues.map((issue, index) => <li key={index}>{issue}</li>)}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    )}  
 
                     {hasReport(reports.unified) && (
                       <details className="pg-raw-report">

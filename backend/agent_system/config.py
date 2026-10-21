@@ -14,6 +14,9 @@ class Settings(BaseSettings):
 
     mongodb_uri: str = ""
     mongodb_db: str = "pipeguard"
+    
+    gemini_api_key: str = ""
+    judge_model: str = "gemini-flash-latest"
 
 
 settings = Settings()

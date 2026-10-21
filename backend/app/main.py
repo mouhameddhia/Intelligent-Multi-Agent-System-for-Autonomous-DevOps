@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,6 +7,10 @@ from app.api.jenkins import router as jenkins_router
 from app.api.prometheus import router as prometheus_router
 from app.api.investigation import router as investigation_router
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 app = FastAPI(
     title="PipeGuard API",
     description="Backend API for the PipeGuard DevOps intelligence platform.",

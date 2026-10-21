@@ -3114,6 +3114,22 @@ button:disabled {
   font-size: 11px;
   font-weight: 700;
 }
+.pg-judge-panel.judge-clean {
+  border-left: 3px solid #22c55e;
+  background: rgba(34, 197, 94, 0.08);
+}
+.pg-judge-panel.judge-warning {
+  border-left: 3px solid #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+.pg-judge-score {
+  font-size: 2rem;
+  font-weight: 700;
+}
+.pg-judge-headline {
+  margin-top: -0.25rem;
+  opacity: 0.85;
+}
 .pg-confidence-panel, .pg-report-panel, .pg-history-panel {
   min-width: 0;
   border: 1px solid #e5e8f0;
@@ -3137,7 +3153,7 @@ button:disabled {
 }
 .pg-confidence-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 .pg-confidence-card {
