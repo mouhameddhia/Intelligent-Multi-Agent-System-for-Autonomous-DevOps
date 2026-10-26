@@ -11,6 +11,7 @@ from langchain_groq import ChatGroq
 
 from ..config import settings
 from ..orchestrator.state import InvestigationState
+from .judge import judge_fix
 
 GITHUB_API_URL = "https://api.github.com"
 
@@ -351,6 +352,27 @@ no explanation, no commentary.
             "message": f"LLM failed to generate a fix: {exc}",
         }}
 
+    # Independent judge gate: a different model (Gemini) reviews the diff
+    # against the original file, the diagnosis and the test file BEFORE any
+    # GitHub write. judge_fix() fails closed, so a judge outage or an
+    # unparseable response rejects the fix just like an explicit "fail" —
+    # nothing is pushed unless the verdict is exactly "pass".
+    judge_result = judge_fix(
+        target_file=target_file,
+        original_content=original_content,
+        new_content=new_content,
+        test_filename=test_filename,
+        test_content=test_content,
+        diagnosis_report=state.get("diagnosis_report", ""),
+        remediation_report=state.get("remediation_report", ""),
+    )
+    if judge_result["verdict"] != "pass":
+        return {**state, "fix_result": {
+            "applied": False,
+            "message": f"Judge rejected the generated fix before any GitHub push: {judge_result['reasoning']}",
+            "judge_result": judge_result,
+        }}
+
     commit_message = (
         f"fix: PipeGuard automated remediation for "
         f"{state['job_name']} build #{state['build_number']}"
@@ -384,6 +406,7 @@ no explanation, no commentary.
             f"Pushed a fix to {target_file}. Rebuild "
             f"{state['job_name']} in Jenkins to see it pass."
         ),
+        "judge_result": judge_result,
     }}
 
 

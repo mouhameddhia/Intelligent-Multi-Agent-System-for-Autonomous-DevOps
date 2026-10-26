@@ -54,3 +54,7 @@ class InvestigationState(TypedDict, total=False):
 
     # Set by the apply_fix node after a real commit is pushed (or fails).
     fix_result: dict[str, Any]
+
+    # Set by apply_fix's internal judge gate before any GitHub push is
+    # attempted. {"verdict": "pass"|"fail", "reasoning": str, "source": str}.
+    judge_result: dict[str, Any]
