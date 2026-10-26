@@ -1,0 +1,89 @@
+# Local test stack for PipeGuard.
+#   docker compose up -d --build                    backend + Jenkins
+#   docker compose --profile tools up -d --build    + Prometheus, Grafana, Loki, SonarQube
+#
+# The backend runs inside Docker, so URLs typed into the PipeGuard UI must be
+# reachable from the container: use service names (http://jenkins:8080),
+# not localhost. See the table at the bottom.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      # Windows bind mounts don't forward file events; poll so --reload works.
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./backend:/app
+      # Lets the Docker integration use unix:///var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:7
+    ports:
+      # Exposed for MongoDB Compass / mongosh on the host.
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  jenkins:
+    build: docker/jenkins
+    ports:
+      # 8081 on the host: 8080 is often taken by a natively installed Jenkins.
+      - "8081:8080"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [tools]
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [tools]
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  loki:
+    image: grafana/loki:latest
+    profiles: [tools]
+    ports:
+      - "3100:3100"
+
+  sonarqube:
+    image: sonarqube:community
+    profiles: [tools]
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+
+volumes:
+  mongo_data:
+  jenkins_home:
+  grafana_data:
+  sonarqube_data:
+
+# URLs to enter in the PipeGuard UI (browser links use localhost instead):
+#   Jenkins      http://jenkins:8080             (browser: http://localhost:8081)
+#   Jenkins installed on Windows: http://host.docker.internal:8080
+#   Prometheus   http://prometheus:9090
+#   Grafana      http://grafana:3000
+#   Loki         http://loki:3100
+#   SonarQube    http://sonarqube:9000
+#   Docker       unix:///var/run/docker.sock
+#   Kubernetes   https://kubernetes.docker.internal:6443  (Docker Desktop k8s, untick Verify TLS)
+#   MongoDB (in .env, not the UI): MONGODB_URI=mongodb://mongo:27017
+#     Compass on the host: mongodb://localhost:27017

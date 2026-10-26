@@ -6,3 +6,5 @@ langchain-core
 langgraph
 pydantic-settings
 httpx
+pymongo
+pytest
