@@ -66,12 +66,14 @@ def compact_evidence(evidence, include_console_log=True):
 
         if isinstance(value, str):
             if _is_console_log(key):
-                limit = 4000
-            else:
-                limit = 1500
+                # Build tools print the failure summary at the END of the log,
+                # so keep the start (checkout, stage) and the whole tail.
+                if len(value) > 4000:
+                    return value[:800] + "\n[... console log truncated for LLM context ...]\n" + value[-3200:]
+                return value
 
-            if len(value) > limit:
-                return value[:limit] + "\\n[truncated for LLM context]"
+            if len(value) > 1500:
+                return value[:1500] + "\\n[truncated for LLM context]"
             return value
 
         return value
