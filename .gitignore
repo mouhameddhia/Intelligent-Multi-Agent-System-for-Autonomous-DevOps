@@ -34,3 +34,6 @@ me.txt
 *.backup_*
 *.pre_repair_*
 *.tar.gz
+
+# Generated fine-tuning data (see backend/training/README.md)
+backend/training/data/

@@ -27,3 +27,39 @@ own work.
 - Tests: `backend/agent_system/tests/test_judge.py`,
   `test_apply_fix_judge_gate.py` and `test_human_approval_gate.py`. Run
   with `cd backend && pytest agent_system/tests`.
+
+## Run locally with Docker
+
+The backend, MongoDB and a Jenkins (with Python and pytest) run in Docker; the
+frontend runs with Vite. Useful on Windows, where Smart App Control can block
+the backend's compiled Python packages.
+
+1. Create `.env` at the repo root (never committed):
+   ```
+   GROQ_API_KEY=...
+   GEMINI_API_KEY=...
+   MONGODB_URI=mongodb://mongo:27017
+   MONGODB_DB=pipeguard
+   ```
+2. `docker compose up -d --build` starts backend (:8000), MongoDB (:27017) and
+   Jenkins (:8081; admin password:
+   `docker compose exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword`).
+   `docker compose --profile tools up -d` adds Prometheus, Grafana, Loki and SonarQube.
+3. `cd frontend && npm install && npm run dev`, then open http://localhost:5173.
+
+The backend runs inside Docker, so URLs typed into the UI must be reachable
+from the container: `http://jenkins:8080`, not `localhost`. The full list is at
+the bottom of `docker-compose.yml`. Code edits under `backend/` reload automatically.
+
+## LLM call logging
+
+Monitoring and Remediation record each call's exact prompt, raw output, token
+usage and latency (`agent_system/llm_log.py`). Investigations store them on the
+incident in MongoDB as `llm_calls`, which is the training data for fine-tuning.
+
+## Fine-tuning (QLoRA on gpt-oss-20b)
+
+`backend/training/` distils the production model (gpt-oss-120b) into a LoRA
+adapter on gpt-oss-20b for Monitoring and Remediation: a mutation-based data
+generator with automatic labels, an exporter, and a Kaggle notebook that trains
+and evaluates the adapter. See `backend/training/README.md`.
