@@ -1,9 +1,11 @@
 import json
+import time
 
 from langchain_groq import ChatGroq
 from langchain.agents import create_agent
 
 from ..config import settings
+from ..llm_log import record_call, append_call
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_remediation_tools
 from .steps import STEP_DELIMITER_START, STEP_DELIMITER_END, split_report_and_steps_json, build_step_dicts
@@ -50,19 +52,7 @@ def _historical_context_block(historical_incident: dict | None) -> str:
         parts.append(f"- Steps proposed for that incident at the time:\n{past_steps_text}")
     return "\n".join(parts) + "\n"
 
-def run_remediation(state: InvestigationState) -> InvestigationState:
-    llm = ChatGroq(
-        model=settings.llm_model,
-        api_key=settings.groq_api_key,
-        temperature=0,
-        max_tokens=2200,
-        model_kwargs={"include_reasoning": False},
-    )
-
-    evidence = state.get("evidence") or {}
-
-    if evidence:
-        grounded_prompt = f"""You are a DevOps remediation advisor.
+GROUNDED_PROMPT = f"""You are a DevOps remediation advisor.
 Prepare a safe, evidence-based proposal for the supplied Jenkins failure.
 
 Rules:
@@ -115,24 +105,49 @@ Rules:
   The JSON block (STEP 1) must always be complete and never be skipped or
   shortened, even if STEP 2 must stay brief to fit.
 """
-        message = (
-            f"Prepare a remediation proposal for Jenkins job {state['job_name']} "
-            f"build #{state['build_number']}.\n\n"
-            f"MONITORING REPORT:\n{state['monitoring_report']}\n\n"
-            f"DIAGNOSIS REPORT:\n{state['diagnosis_report']}"
-            f"{_historical_context_block(state.get('historical_incident'))}"
-        )
-        result = llm.invoke([
-            ("system", grounded_prompt),
-            ("human", message),
-        ])
+
+
+def build_remediation_messages(state: InvestigationState) -> list[tuple[str, str]]:
+    """Prompt for the evidence-grounded path. training/ reuses it, so
+    fine-tuning examples match the production prompt exactly."""
+    message = (
+        f"Prepare a remediation proposal for Jenkins job {state['job_name']} "
+        f"build #{state['build_number']}.\n\n"
+        f"MONITORING REPORT:\n{state['monitoring_report']}\n\n"
+        f"DIAGNOSIS REPORT:\n{state['diagnosis_report']}"
+        f"{_historical_context_block(state.get('historical_incident'))}"
+    )
+    return [("system", GROUNDED_PROMPT), ("human", message)]
+
+
+def run_remediation(state: InvestigationState) -> InvestigationState:
+    llm = ChatGroq(
+        model=settings.llm_model,
+        api_key=settings.groq_api_key,
+        temperature=0,
+        max_tokens=2200,
+        model_kwargs={"include_reasoning": False},
+    )
+
+    evidence = state.get("evidence") or {}
+
+    if evidence:
+        messages = build_remediation_messages(state)
+        started = time.perf_counter()
+        result = llm.invoke(messages)
         raw_output = result.content
 
         report_text, step_texts = split_report_and_steps_json(raw_output)
         report_text, confidence = extract_agent_confidence(report_text)
         steps = build_step_dicts(step_texts) if step_texts else []
 
-        return {**state, "remediation_report": report_text, "remediation_confidence": confidence, "steps": steps}
+        return {
+            **state,
+            "remediation_report": report_text,
+            "remediation_confidence": confidence,
+            "steps": steps,
+            "llm_calls": append_call(state, record_call("remediation", messages, result, started)),
+        }
 
     # Legacy path is LLM-only: no past-fix tools or memory.
     message = (

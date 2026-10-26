@@ -58,3 +58,7 @@ class InvestigationState(TypedDict, total=False):
     # Set by apply_fix's internal judge gate before any GitHub push is
     # attempted. {"verdict": "pass"|"fail", "reasoning": str, "source": str}.
     judge_result: dict[str, Any]
+
+    # Exact prompt/output/tokens/latency of each single-shot agent call
+    # (llm_log.record_call). Persisted with the incident as training data.
+    llm_calls: list[dict[str, Any]]

@@ -102,6 +102,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
         "approval_status": "",
         "fix_result": {},
         "historical_incident": None,
+        "llm_calls": [],
     }
 
     config = {
@@ -144,6 +145,8 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "source": request.source,
             "incident_type": request.incident_type,
             "steps": result.get("steps", []),
+            # Exact prompts and outputs: training data once feedback verifies them.
+            "llm_calls": result.get("llm_calls", []),
             "solved_step_id": None,
             "status": "awaiting_approval",
             "decision": None,

@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 
 from langchain_groq import ChatGroq
 from langchain.agents import create_agent
@@ -7,6 +8,7 @@ from langchain.agents import create_agent
 from .evidence_utils import compact_evidence, build_summary_markdown
 from .confidence import extract_agent_confidence, monitoring_evidence_confidence
 from ..config import settings
+from ..llm_log import record_call, append_call
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_monitoring_tools
 
@@ -65,6 +67,19 @@ STRICT RULES:
 """
 
 
+def build_monitoring_messages(state: InvestigationState) -> list[tuple[str, str]]:
+    """Prompt for the evidence-grounded path. training/ reuses it, so
+    fine-tuning examples match the production prompt exactly."""
+    message = (
+        f"Monitor Jenkins job {state['job_name']} build "
+        f"#{state['build_number']}. The following evidence was collected "
+        f"from configured providers for this investigation. Treat provider "
+        f"statuses as authoritative and do not fill gaps with guesses:\n\n"
+        f"{json.dumps(compact_evidence(state.get('evidence') or {}), separators=(',', ':'), default=str)}"
+    )
+    return [("system", GROUNDED_PROMPT), ("human", message)]
+
+
 def run_monitoring(state: InvestigationState) -> InvestigationState:
     llm = ChatGroq(
         model=settings.llm_model,
@@ -80,18 +95,9 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
     evidence = state.get("evidence") or {}
 
     if evidence:
-        message = (
-            f"Monitor Jenkins job {state['job_name']} build "
-            f"#{state['build_number']}. The following evidence was collected "
-            f"from configured providers for this investigation. Treat provider "
-            f"statuses as authoritative and do not fill gaps with guesses:\n\n"
-            f"{json.dumps(compact_evidence(evidence), separators=(',', ':'), default=str)}"
-        )
-
-        result = llm.invoke([
-            ("system", GROUNDED_PROMPT),
-            ("human", message),
-        ])
+        messages = build_monitoring_messages(state)
+        started = time.perf_counter()
+        result = llm.invoke(messages)
 
         raw = result.content
         if not isinstance(raw, str):
@@ -119,6 +125,7 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
             "monitoring_report": report,
             "monitoring_confidence": confidence,
             "monitoring_confidence_source": source,
+            "llm_calls": append_call(state, record_call("monitoring", messages, result, started)),
         }
 
     # Compatibility path for the teammate's original standalone demo.
