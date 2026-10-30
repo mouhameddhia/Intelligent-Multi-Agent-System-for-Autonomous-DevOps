@@ -89,7 +89,7 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
         # Reasoning tokens count against this budget on gpt-oss models, so keep
         # generous headroom: a truncated answer loses the confidence line.
         max_tokens=2500,
-        model_kwargs={"include_reasoning": False},
+        model_kwargs={"include_reasoning": settings.llm_include_reasoning},
     )
 
     evidence = state.get("evidence") or {}

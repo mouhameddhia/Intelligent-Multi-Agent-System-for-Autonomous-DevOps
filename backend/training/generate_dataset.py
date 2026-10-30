@@ -59,11 +59,17 @@ COMMIT_MESSAGES = [
 
 def run_tests(mutant: Mutant) -> tuple[bool, str, list[str]]:
     """Run the mutated project's tests. Returns (passed, pytest output, failing test ids)."""
+    source = (SAMPLE_PROJECT / mutant.file).read_text(encoding="utf-8")
+    return run_suite({mutant.file: mutant.apply(source)})
+
+
+def run_suite(files: dict[str, str]) -> tuple[bool, str, list[str]]:
+    """Run the sample project's tests with some files replaced ({path: content})."""
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp) / "project"
         shutil.copytree(SAMPLE_PROJECT, project, ignore=shutil.ignore_patterns("__pycache__"))
-        target = project / mutant.file
-        target.write_text(mutant.apply(target.read_text(encoding="utf-8")), encoding="utf-8")
+        for name, content in files.items():
+            (project / name).write_text(content, encoding="utf-8")
 
         report = Path(tmp) / "report.xml"
         completed = subprocess.run(
@@ -262,6 +268,10 @@ def main() -> None:
     parser.add_argument("--pause", type=float, default=20, help="seconds between teacher runs (Groq TPM)")
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
+
+    # Record the teacher's reasoning too: reasoning students (gpt-oss, Qwen3)
+    # are distilled on reasoning + answer, not on the answer alone.
+    settings.llm_include_reasoning = True
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     done = _done_ids(args.out)

@@ -31,8 +31,14 @@ def _keep(agent: str, labels: dict) -> bool:
 
 
 def _example(call: dict, meta: dict) -> dict:
+    """The assistant turn keeps the teacher's reasoning under a neutral
+    "reasoning" key; the notebook maps it to each model family's own field
+    (gpt-oss "thinking", Qwen3 "reasoning_content")."""
+    answer = {"role": "assistant", "content": call["output"]}
+    if call.get("reasoning"):
+        answer["reasoning"] = call["reasoning"]
     return {
-        "messages": [*call["messages"], {"role": "assistant", "content": call["output"]}],
+        "messages": [*call["messages"], answer],
         "meta": {**meta, "agent": call["agent"], "teacher_model": call.get("model")},
     }
 
@@ -57,6 +63,7 @@ def teacher_examples(path: Path) -> tuple[list[dict], Counter]:
             }
             for call in run["llm_calls"]:
                 if call["agent"] in AGENTS and _keep(call["agent"], run["labels"]):
+                    stats["with_reasoning"] += bool(call.get("reasoning"))
                     examples.append(_example(call, meta))
     return examples, stats
 
@@ -93,6 +100,7 @@ def main() -> None:
         print(f"Teacher accuracy over {stats['runs']} runs: " + ", ".join(
             f"{key} {stats[key] / stats['runs']:.0%}" for key in ("monitoring_ok", "diagnosis_ok", "remediation_ok")
         ))
+        print(f"Kept examples with teacher reasoning: {stats['with_reasoning']} of {len(examples)}")
     if args.include_mongo:
         examples += mongo_examples()
 

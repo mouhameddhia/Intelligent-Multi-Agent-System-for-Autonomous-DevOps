@@ -126,7 +126,7 @@ def run_remediation(state: InvestigationState) -> InvestigationState:
         api_key=settings.groq_api_key,
         temperature=0,
         max_tokens=2200,
-        model_kwargs={"include_reasoning": False},
+        model_kwargs={"include_reasoning": settings.llm_include_reasoning},
     )
 
     evidence = state.get("evidence") or {}

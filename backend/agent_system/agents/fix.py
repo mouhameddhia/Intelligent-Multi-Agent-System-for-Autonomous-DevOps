@@ -239,6 +239,70 @@ def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: s
     return None
 
 
+def build_fix_prompt(
+    target_file: str,
+    original_content: str,
+    test_filename: str | None,
+    test_content: str | None,
+    diagnosis_report: str,
+    remediation_report: str,
+) -> str:
+    """The Fix agent's prompt. training/eval_fix.py reuses it, so the
+    fix-success benchmark measures exactly what production would push."""
+    test_file_block = ""
+    overfit_rules = ""
+    if test_content:
+        test_file_block = f"""
+
+FULL TEST FILE ({test_filename}) — this is the ground truth for correct behavior:
+{test_content}
+"""
+        overfit_rules = """
+- You are given the FULL test file above. Fix the implementation so that
+  every test in it passes, not just the single failure quoted in the
+  diagnosis/remediation reports above — do not overfit to one assertion.
+- EXCEPTION: if a test's own comment states it is intentionally designed to
+  fail (e.g. "intentionally failing", "control test", "expected to fail"),
+  do NOT change the implementation to satisfy it. Leave that one test
+  failing on purpose and do not mention changing it.
+- Do not treat stale or incorrect documentation as ground truth over the
+  tests. Only if a docstring or comment explicitly contradicts what the real
+  (non-intentional) tests expect, correct that one docstring or comment.
+"""
+
+    return f"""You are a senior engineer fixing a broken Jenkins build.
+
+FILE: {target_file}
+
+CURRENT FILE CONTENT:
+{original_content}
+{test_file_block}
+DIAGNOSIS REPORT:
+{diagnosis_report}
+
+REMEDIATION REPORT:
+{remediation_report}
+
+Rewrite the ENTIRE file with the bug fixed, based on the diagnosis and
+remediation above. Make the smallest change that fixes the bug: every line
+you do not need to change must stay exactly as it is, including docstrings,
+comments, names and formatting. Do not refactor, reword or tidy anything.
+{overfit_rules}
+Return ONLY the complete corrected file content — no markdown fences,
+no explanation, no commentary.
+"""
+
+
+def clean_fix_output(text: str) -> str:
+    """Strip a markdown fence the model may wrap the file in."""
+    new_content = text.strip()
+    if new_content.startswith("```"):
+        new_content = new_content.split("\n", 1)[1]
+        if new_content.endswith("```"):
+            new_content = new_content.rsplit("```", 1)[0]
+    return new_content
+
+
 def run_apply_fix(state: InvestigationState) -> InvestigationState:
     token = state.get("github_token") or ""
     owner = state.get("github_owner") or ""
@@ -297,55 +361,14 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
         model_kwargs={"include_reasoning": False},
     )
 
-    test_file_block = ""
-    overfit_rules = ""
-    if test_content:
-        test_file_block = f"""
-
-FULL TEST FILE ({test_filename}) — this is the ground truth for correct behavior:
-{test_content}
-"""
-        overfit_rules = """
-- You are given the FULL test file above. Fix the implementation so that
-  every test in it passes, not just the single failure quoted in the
-  diagnosis/remediation reports above — do not overfit to one assertion.
-- EXCEPTION: if a test's own comment states it is intentionally designed to
-  fail (e.g. "intentionally failing", "control test", "expected to fail"),
-  do NOT change the implementation to satisfy it. Leave that one test
-  failing on purpose and do not mention changing it.
-- If the file's existing docstring or comments describe behavior that
-  contradicts what the real (non-intentional) tests expect, correct the
-  docstring/comments to match the fixed, correct behavior. Do not treat
-  stale or incorrect documentation as ground truth over the tests.
-"""
-
-    fix_prompt = f"""You are a senior engineer fixing a broken Jenkins build.
-
-FILE: {target_file}
-
-CURRENT FILE CONTENT:
-{original_content}
-{test_file_block}
-DIAGNOSIS REPORT:
-{state.get('diagnosis_report', '')}
-
-REMEDIATION REPORT:
-{state.get('remediation_report', '')}
-
-Rewrite the ENTIRE file with the bug fixed, based on the diagnosis and
-remediation above. Preserve everything unrelated to the bug.
-{overfit_rules}
-Return ONLY the complete corrected file content — no markdown fences,
-no explanation, no commentary.
-"""
+    fix_prompt = build_fix_prompt(
+        target_file, original_content, test_filename, test_content,
+        state.get('diagnosis_report', ''), state.get('remediation_report', ''),
+    )
 
     try:
         result = _invoke_with_retry(llm, fix_prompt)
-        new_content = result.content.strip()
-        if new_content.startswith("```"):
-            new_content = new_content.split("\n", 1)[1]
-            if new_content.endswith("```"):
-                new_content = new_content.rsplit("```", 1)[0]
+        new_content = clean_fix_output(result.content)
     except Exception as exc:
         return {**state, "fix_result": {
             "applied": False,

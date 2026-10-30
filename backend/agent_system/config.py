@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     )
     groq_api_key: str = ""
     llm_model: str = "openai/gpt-oss-120b"
+    # Return gpt-oss's reasoning text with Monitoring/Remediation answers.
+    # Off in production (fewer tokens to transfer); training.generate_dataset
+    # turns it on so students can be distilled on reasoning + answer.
+    llm_include_reasoning: bool = False
     agent_port: int = 8001
     use_synthetic: bool = True
 

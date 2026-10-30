@@ -24,6 +24,11 @@ own work.
   `orchestrator/graph.py`) is unchanged and still runs before `apply_fix`
   — the judge is an additional, internal gate inside that same node, not a
   replacement for human approval.
+- **Minimal diffs**: the Fix prompt (`build_fix_prompt`) asks for the
+  smallest change that fixes the bug and keeps every other line, docstrings
+  included, exactly as it was. Measured on 60 fixes, this took the diff from
+  20 extra lines on average to none, and builds passing from 95% to 100%
+  (`backend/training/eval_fix.py`).
 - Tests: `backend/agent_system/tests/test_judge.py`,
   `test_apply_fix_judge_gate.py` and `test_human_approval_gate.py`. Run
   with `cd backend && pytest agent_system/tests`.
@@ -57,9 +62,14 @@ Monitoring and Remediation record each call's exact prompt, raw output, token
 usage and latency (`agent_system/llm_log.py`). Investigations store them on the
 incident in MongoDB as `llm_calls`, which is the training data for fine-tuning.
 
-## Fine-tuning (QLoRA on gpt-oss-20b)
+## Fine-tuning (QLoRA distillation)
 
-`backend/training/` distils the production model (gpt-oss-120b) into a LoRA
-adapter on gpt-oss-20b for Monitoring and Remediation: a mutation-based data
-generator with automatic labels, an exporter, and a Kaggle notebook that trains
-and evaluates the adapter. See `backend/training/README.md`.
+`backend/training/` distils the production model's reasoning and answers
+(gpt-oss-120b) into LoRA adapters for Monitoring and Remediation, on Qwen3-4B
+(runs locally in Ollama) and gpt-oss-20b (strongest that trains on a free Kaggle
+T4): a mutation-based data generator with automatic labels, an exporter, and one
+Kaggle notebook that trains, evaluates and exports either student. A fix-success
+benchmark (`training/eval_fix.py`) applies each model's proposal through the
+production Fix agent and reruns the tests. Result so far: on the sample project's
+single-token bugs, fine-tuning shows no measurable gain, and a local Qwen3-4B gives
+the same end result as gpt-oss-120b. See `backend/training/README.md`.
