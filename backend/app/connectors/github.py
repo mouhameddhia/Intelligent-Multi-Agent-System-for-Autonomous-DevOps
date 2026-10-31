@@ -137,6 +137,10 @@ class GitHubConnector:
                     "additions": item.get("additions", 0),
                     "deletions": item.get("deletions", 0),
                     "changes": item.get("changes", 0),
+                    # GitHub supplies a unified diff for text files. This is
+                    # needed to verify code-level root-cause claims, not just
+                    # infer from commit messages and change counts.
+                    "patch": item.get("patch"),
                 }
                 for item in files
                 if isinstance(item, dict)

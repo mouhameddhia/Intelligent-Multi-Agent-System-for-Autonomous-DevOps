@@ -3122,6 +3122,9 @@ button:disabled {
   border-left: 3px solid #f59e0b;
   background: rgba(245, 158, 11, 0.08);
 }
+.pg-judge-panel.judge-neutral {
+  border-left: 3px solid #94a3b8;
+}
 .pg-judge-score {
   font-size: 2rem;
   font-weight: 700;

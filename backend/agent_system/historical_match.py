@@ -10,6 +10,8 @@ the API layer."""
 import re
 from typing import Any
 
+from .agents.evidence_utils import compact_evidence
+
 def _norm(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
@@ -116,8 +118,19 @@ def get_candidate_incidents(
                     "job_name": summary["job_name"],
                     "build_number": summary["build_number"],
                     "exact_signature_match": True,
+                    "signature_basis": {
+                        "test_id": current_sig[0],
+                        "assertion": current_sig[1],
+                        "meaning": "Same normalized failed test and assertion; this does not by itself prove the same root cause.",
+                    },
                     "resolution_method": summary["resolution_method"],
                     "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
+                    "evidence": compact_evidence(
+                        doc.get("evidence") or {},
+                        include_console_log=True,
+                        patch_limit=2000,
+                        file_list_limit=40,
+                    ),
                 })
                 seen_ids.add(summary["incident_id"])
                 if len(candidates) >= limit:
@@ -135,6 +148,12 @@ def get_candidate_incidents(
                     "exact_signature_match": False,
                     "resolution_method": summary["resolution_method"],
                     "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
+                    "evidence": compact_evidence(
+                        doc.get("evidence") or {},
+                        include_console_log=True,
+                        patch_limit=2000,
+                        file_list_limit=40,
+                    ),
                 })
                 seen_ids.add(summary["incident_id"])
                 if len(candidates) >= limit:
@@ -174,6 +193,26 @@ def resolve_historical_match(
             current_sig = _signature(current_evidence or {})
             matched_sig = _signature(doc.get("evidence") or {})
             resolved["exact_signature_match"] = current_sig is not None and current_sig == matched_sig
+            resolved["signature_basis"] = {
+                "current": (
+                    {"test_id": current_sig[0], "assertion": current_sig[1]}
+                    if current_sig else None
+                ),
+                "historical": (
+                    {"test_id": matched_sig[0], "assertion": matched_sig[1]}
+                    if matched_sig else None
+                ),
+                "meaning": "The check compares normalized failed test identifiers and assertion text; it does not prove the same root cause.",
+            }
+        # Give the judge the historical basis it needs to audit a claimed
+        # match. Bound it here so it does not make API responses unbounded.
+        resolved["diagnosis_report"] = (doc.get("diagnosis_report") or "")[:4000]
+        resolved["evidence"] = compact_evidence(
+            doc.get("evidence") or {},
+            include_console_log=True,
+            patch_limit=4000,
+            file_list_limit=40,
+        )
         return resolved
     except Exception:
         return None

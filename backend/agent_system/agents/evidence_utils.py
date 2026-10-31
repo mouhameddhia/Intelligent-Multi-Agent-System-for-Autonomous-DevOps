@@ -48,7 +48,14 @@ def _is_console_log(key):
     )
 
 
-def compact_evidence(evidence, include_console_log=True):
+def compact_evidence(
+    evidence,
+    include_console_log=True,
+    *,
+    patch_limit=1500,
+    file_list_limit=8,
+    console_log_limit=4000,
+):
     """Return a bounded copy; never mutate the original evidence."""
     def compact(value, key=""):
         if isinstance(value, dict):
@@ -61,12 +68,15 @@ def compact_evidence(evidence, include_console_log=True):
 
         if isinstance(value, list):
             # Keep representative evidence instead of large provider payloads.
-            limit = 8 if "file" in key.lower() else 5
+            limit = file_list_limit if "file" in key.lower() else 5
             return [compact(item, key) for item in value[:limit]]
 
         if isinstance(value, str):
-            if _is_console_log(key):
-                limit = 4000
+            normalized_key = key.lower().replace("-", "_").replace(" ", "_")
+            if normalized_key in {"patch", "diff"}:
+                limit = patch_limit
+            elif _is_console_log(key):
+                limit = console_log_limit
             else:
                 limit = 1500
 

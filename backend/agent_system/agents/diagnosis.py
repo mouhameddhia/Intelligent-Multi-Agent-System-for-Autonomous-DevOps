@@ -49,9 +49,13 @@ Rules:
   already confident, to check whether history confirms or conflicts with
   your hypothesis. Do not skip it and do not call it more than once.
 - If it returns one or more candidates, compare EACH candidate's
-  diagnosis_report to your OWN hypothesis and judge, in your own words,
-  whether the root-cause MECHANISM is the same — a shared test name or job
-  alone is not sufficient evidence of a match.
+  diagnosis_report and bounded provider evidence to your OWN hypothesis and
+  judge, in your own words, whether the root-cause MECHANISM is the same — a
+  shared test name or job alone is not sufficient evidence of a match.
+- exact_signature_match means only that the normalized failed test identifier
+  and assertion text match. It is symptom-level evidence, not proof of the
+  same root cause. If the historical diagnosis and evidence do not establish
+  the same mechanism, do not claim a root-cause match.
 - If exactly one candidate is a genuine root-cause match, end with
   HISTORICAL_MATCH_ID: <that candidate's incident_id>. If several could
   match, pick the strongest (prefer exact_signature_match=true) and justify
@@ -83,7 +87,7 @@ FORMAT RULES:
             f"#{state['build_number']} using the Monitoring Report and this "
             f"provider evidence bundle:\n\n"
             f"MONITORING REPORT:\n{state['monitoring_report']}\n\n"
-            f"PROVIDER EVIDENCE:\n{json.dumps(compact_evidence(evidence, include_console_log=False), separators=(',', ':'), default=str)}"
+            f"PROVIDER EVIDENCE:\n{json.dumps(compact_evidence(evidence, include_console_log=False, patch_limit=4000, file_list_limit=40), separators=(',', ':'), default=str)}"
         )
         tools = make_historical_search_tool(evidence, state["job_name"])
         agent = create_agent(model=llm, tools=tools, system_prompt=grounded_prompt)

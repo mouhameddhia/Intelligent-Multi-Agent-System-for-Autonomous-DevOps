@@ -24,9 +24,13 @@ def _judge_as_markdown(state: dict[str, Any]) -> str:
 
     lines = []
     if overall is not None:
-        clean = hallucination is False and not issues
-        headline = "✅ Looks solid — no hallucination, claims check out against the evidence." if clean \
-            else "⚠️ Worth a second look before approving." if (hallucination or issues) else ""
+        headline = (
+            "✅ No hallucinations detected; review notes below are context and evidence caveats."
+            if hallucination is False
+            else "⚠️ The judge found possible unsupported claims; review the evidence concerns below."
+            if hallucination is True
+            else "Judge could not determine whether hallucinations are present."
+        )
         lines.append(f"**Judge overall: {overall}%**" + (f" — {headline}" if headline else ""))
     score_parts = [f"{name.capitalize()} ({score}%)" for name, score in scores.items() if score is not None]
     if score_parts:
@@ -34,12 +38,12 @@ def _judge_as_markdown(state: dict[str, Any]) -> str:
     if hist_quality is not None:
         lines.append(f"**Historical match quality:** {hist_quality}%")
     if hallucination is True:
-        lines.append("**⚠ Hallucination or unsupported claims detected.**")
+        lines.append("**⚠️ Possible hallucinations or unsupported claims detected.**")
     elif hallucination is False:
-        lines.append("**✅ No hallucination detected.**")
+        lines.append("**✅ No hallucinations detected in the audited claims.**")
     if issues:
         lines.append("")
-        lines.append("**Flagged issues:**")
+        lines.append("**Review notes:**" if hallucination is False else "**Evidence concerns:**")
         lines.extend(f"- {issue}" for issue in issues)
     if verdict:
         lines.extend(["", verdict])

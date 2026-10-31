@@ -77,6 +77,52 @@ function statusClass(status) {
   return 'neutral'
 }
 
+function formatJudgeAuditForReport(reports) {
+  const scores = reports.judgeScores || {}
+  const issues = reports.judgeIssues || []
+  const hallucination = reports.judgeHallucinationDetected
+  const lines = []
+
+  if (typeof reports.judgeOverallScore === 'number') {
+    lines.push(`**Judge score: ${reports.judgeOverallScore}%**`)
+  }
+  const scoreParts = Object.entries(scores)
+    .filter(([, score]) => score !== null && score !== undefined)
+    .map(([name, score]) => `${name[0].toUpperCase()}${name.slice(1)} (${score}%)`)
+  if (scoreParts.length) lines.push(`**Per-agent scores:** ${scoreParts.join(', ')}`)
+  if (typeof reports.judgeHistoricalMatchQuality === 'number') {
+    lines.push(`**Historical match quality:** ${reports.judgeHistoricalMatchQuality}%`)
+  }
+
+  if (hallucination === false) {
+    lines.push('**✅ No hallucinations detected in the audited claims.**')
+    if (issues.length) {
+      lines.push('', '**Review notes:**', ...issues.map((issue) => `- ${issue}`))
+    }
+  } else if (hallucination === true) {
+    lines.push('**⚠️ The judge detected possible hallucinations or unsupported claims.**')
+    if (issues.length) lines.push('', '**Evidence concerns:**', ...issues.map((issue) => `- ${issue}`))
+  } else if (issues.length) {
+    lines.push('**Review notes:**', ...issues.map((issue) => `- ${issue}`))
+  }
+
+  const verdict = (reports.judgeVerdict || '').trim()
+  if (verdict) lines.push('', verdict)
+  return lines.join('\n') || '_Judge verdict unavailable for this incident._'
+}
+
+function getUnifiedReportForDisplay(reports) {
+  const unified = reports.unified || ''
+  const auditHeading = '## Independent audit (LLM judge)'
+  const auditStart = unified.indexOf(auditHeading)
+  if (auditStart < 0) return unified
+
+  const nextSection = unified.indexOf('\n---\n\n## Overall agent confidence estimate', auditStart)
+  if (nextSection < 0) return unified
+
+  return `${unified.slice(0, auditStart + auditHeading.length)}\n\n${formatJudgeAuditForReport(reports)}${unified.slice(nextSection)}`
+}
+
 function App() {
   const [activePage, setActivePage] = useState('dashboard')
   const [integrations, setIntegrations] = useState(initialIntegrations)
@@ -2139,18 +2185,22 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                     {typeof reports.judgeOverallScore === 'number' && (
                       <section
                         className={`pg-report-panel pg-judge-panel ${
-                          reports.judgeHallucinationDetected === false && (reports.judgeIssues || []).length === 0
+                          reports.judgeHallucinationDetected === false
                             ? 'judge-clean'
-                            : 'judge-warning'
+                            : reports.judgeHallucinationDetected === true
+                              ? 'judge-warning'
+                              : 'judge-neutral'
                         }`}
                       >
                         <div className="pg-panel-kicker">05 · INDEPENDENT AUDIT</div>
                         <h4>Judge score</h4>
                         <div className="pg-judge-score">{reports.judgeOverallScore}%</div>
                         <p className="pg-judge-headline">
-                          {reports.judgeHallucinationDetected === false && (reports.judgeIssues || []).length === 0
-                            ? 'Looks solid — no hallucination, claims check out against the evidence.'
-                            : 'Worth a second look before approving.'}
+                          {reports.judgeHallucinationDetected === false
+                            ? 'No hallucinations detected. Review notes below are context and evidence caveats.'
+                            : reports.judgeHallucinationDetected === true
+                              ? 'The judge found possible unsupported claims. Review the evidence concerns below.'
+                              : 'Judge could not determine whether hallucinations are present.'}
                         </p>
                         <div className="pg-summary-fields">
                           {Object.entries(reports.judgeScores || {}).length > 0 && (
@@ -2171,7 +2221,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                           )}
                           {(reports.judgeIssues || []).length > 0 && (
                             <div className="pg-summary-field">
-                              <strong>Flagged issues</strong>
+                              <strong>{reports.judgeHallucinationDetected === false ? 'Review notes' : 'Evidence concerns'}</strong>
                               <ul className="pg-historical-actions">
                                 {reports.judgeIssues.map((issue, index) => <li key={index}>{issue}</li>)}
                               </ul>
@@ -2185,7 +2235,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                       <details className="pg-raw-report">
                         <summary>View full investigation report</summary>
                         <div className="agent-report-markdown">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{reports.unified}</ReactMarkdown>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{getUnifiedReportForDisplay(reports)}</ReactMarkdown>
                         </div>
                       </details>
                     )}

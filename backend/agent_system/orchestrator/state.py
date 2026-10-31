@@ -50,8 +50,8 @@ class InvestigationState(TypedDict, total=False):
     historical_incident: dict[str, Any] | None
     
     # Independent audit of Monitoring/Diagnosis/Remediation against the
-    # evidence, produced by a different model family (Gemini vs. the
-    # pipeline's Groq). Purely informative — never gates approval. Every
+    # evidence, produced by a different model family (Qwen vs. the
+    # pipeline's GPT-OSS). Purely informative — never gates approval. Every
     # field is None/empty-safe if the judge call fails for any reason.
     judge_verdict: str
     judge_scores: dict[str, int | None]

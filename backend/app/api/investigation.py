@@ -337,6 +337,28 @@ def get_incident_by_id(incident_id: str):
         )
         raise
 
+@router.get("/api/judge/calibration")
+def get_judge_calibration(limit: int = 500):
+    """How often the judge's predicted-good/bad call matched what engineers
+    actually reported. Best-effort: incidents without feedback or without a
+    judge score are simply excluded, not counted as wrong."""
+    incidents = list_incidents(limit=limit)
+    calibrated = [
+        inc.get("judge_calibration")
+        for inc in incidents
+        if isinstance(inc.get("judge_calibration"), dict)
+    ]
+
+    total = len(calibrated)
+    correct = sum(1 for c in calibrated if c.get("correct") is True)
+
+    return {
+        "total_calibrated_incidents": total,
+        "correct": correct,
+        "accuracy_pct": round(100 * correct / total) if total else None,
+        "samples": calibrated[:20],
+    }
+
 
 @router.post("/api/investigate/stream")
 def investigate_stream(request: InvestigateRequest, http_request: Request):
@@ -501,6 +523,20 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
                 ),
             )
 
+        judge_score = incident.get("judge_overall_score")
+        judge_hallucination = incident.get("judge_hallucination_detected")
+        judge_predicted_good = (
+            judge_score is not None
+            and judge_score >= 70
+            and judge_hallucination is not True
+        )
+        judge_calibration = {
+            "judge_predicted_good": judge_predicted_good,
+            "actual_good": request.build_passed,
+            "correct": judge_predicted_good == request.build_passed,
+            "judge_score_at_time": judge_score,
+        } if judge_score is not None else None
+
         doc = {
             "_id": incident_id,
             "feedback": {
@@ -515,9 +551,10 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
             "status": (
                 "resolved" if request.build_passed else "needs_followup"
             ),
+            "judge_calibration": judge_calibration,
             "updated_at": _now(),
         }
-
+        
         if request.resolution_path == "manual":
             steps = incident.get("steps") or []
             known = {step.get("id") for step in steps}

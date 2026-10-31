@@ -1,13 +1,12 @@
 """LLM-as-judge: audits Monitoring, Diagnosis and Remediation against the
 evidence, scoring each agent and flagging hallucination or gaps. Runs on a
-different model family (Gemini) than the rest of the pipeline (Groq), by
-design — a model should not grade its own output. Purely informative: a
-judge failure of any kind must never break the investigation pipeline."""
+different model family (Qwen) than the agents (GPT-OSS). Purely informative:
+a judge failure of any kind must never break the investigation pipeline."""
 
 import json
 import re
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 from .evidence_utils import compact_evidence
 from ..config import settings
@@ -15,6 +14,10 @@ from ..orchestrator.state import InvestigationState
 
 JUDGE_DELIMITER_START = "===JUDGE_JSON_START==="
 JUDGE_DELIMITER_END = "===JUDGE_JSON_END==="
+_FILE_REFERENCE_RE = re.compile(
+    r"(?<![\w./-])(?:[\w.-]+/)*[\w.-]+\.(?:py|pyi|js|jsx|ts|tsx|java|go|rs|rb|php|cs|cpp|c|h|yaml|yml|json|toml)(?!\w)",
+    re.IGNORECASE,
+)
 
 SYSTEM_PROMPT = f"""\
 You are an independent auditor in a DevOps investigation pipeline. You did
@@ -34,7 +37,7 @@ Your job:
 5. If a HISTORICAL INCIDENT block is supplied, separately score how well the
    claimed match actually holds up (0-100): the agents already decided
    match/no-match — you are grading whether that decision was sound given
-   both diagnosis reports' stated root causes.
+   both diagnosis reports and the supplied historical evidence.
 
 Rules:
 - Base every judgment ONLY on the supplied evidence and reports. Do not use
@@ -42,8 +45,22 @@ Rules:
   happened.
 - Be specific: every issue you list must name the exact unsupported claim or
   ignored evidence, not a vague impression.
+- Before flagging a report, verify that the named claim actually appears in
+  that report. Quote a short exact fragment; do not attribute a claim based
+  only on implication or on text that is absent.
+- Distinguish a stated fact from a qualified inference. Flag an inference as
+  unsupported only when the report presents it more strongly than the
+  supplied evidence permits.
 - If a HISTORICAL INCIDENT block is NOT supplied, historical_match_quality
   must be null and you must not comment on history at all.
+- An exact failure-signature match only means the normalized failed test
+  identifier and assertion match. It is symptom-level evidence, not proof
+  that the underlying root cause is the same.
+- A file entry marked patch_status="omitted_by_token_budget" provides path
+  and change-count metadata only; do not treat its code as inspected.
+- Check the supplied historical diagnosis and evidence before accepting a
+  historical root-cause match. If either is missing, say the match cannot be
+  verified from the available evidence.
 
 OUTPUT FORMAT — in exactly this order, nothing before it:
 
@@ -70,17 +87,101 @@ must be shortened to fit.
 """
 
 
-def _historical_block(historical_incident: dict | None) -> str:
+def _referenced_paths(text: str) -> set[str]:
+    return {match.group(0).lower().strip(".,:;`'") for match in _FILE_REFERENCE_RE.finditer(text or "")}
+
+
+def _judge_evidence(
+    evidence: dict,
+    focus_text: str,
+    *,
+    include_console_log: bool,
+    patch_limit: int = 2000,
+    max_patches: int = 2,
+    console_log_limit: int = 2500,
+) -> dict:
+    """Keep all bounded evidence metadata but include patches only where useful."""
+    bounded = compact_evidence(
+        evidence or {},
+        include_console_log=include_console_log,
+        patch_limit=patch_limit,
+        file_list_limit=40,
+        console_log_limit=console_log_limit,
+    )
+    github = bounded.get("github")
+    files = github.get("files") if isinstance(github, dict) else None
+    if not isinstance(files, list):
+        return bounded
+
+    references = _referenced_paths(focus_text)
+    reference_basenames = {path.rsplit("/", 1)[-1] for path in references}
+    candidates = []
+    for index, item in enumerate(files):
+        if not isinstance(item, dict) or not isinstance(item.get("patch"), str) or not item["patch"]:
+            continue
+        filename = str(item.get("filename", "")).lower()
+        is_referenced = filename in references or filename.rsplit("/", 1)[-1] in reference_basenames
+        candidates.append((0 if is_referenced else 1, index))
+
+    # Prefer patches for paths named in the agent reports; include a few
+    # additional diffs as context. Keep metadata for every changed file.
+    ranked = sorted(candidates)
+    referenced = [index for rank, index in ranked if rank == 0]
+    # Always retain every report-referenced diff up to the cap, then use any
+    # remaining slots for a little surrounding commit context.
+    selected = set(referenced[:max_patches])
+    for _, index in ranked:
+        if len(selected) >= max_patches:
+            break
+        selected.add(index)
+    for index, item in enumerate(files):
+        if not isinstance(item, dict):
+            continue
+        if index in selected:
+            item["patch_status"] = "included"
+        elif isinstance(item.get("patch"), str) and item["patch"]:
+            item.pop("patch", None)
+            item["patch_status"] = "omitted_by_token_budget"
+        else:
+            item.pop("patch", None)
+            item["patch_status"] = "not_returned_by_github"
+    return bounded
+
+
+def _historical_block(historical_incident: dict | None, focus_text: str = "") -> str:
     if not historical_incident:
         return ""
+    diagnosis_report = (historical_incident.get("diagnosis_report") or "").strip()
+    raw_history = historical_incident.get("evidence") or {}
+    raw_jenkins = raw_history.get("jenkins") if isinstance(raw_history, dict) else None
+    historical_jenkins = {}
+    if isinstance(raw_jenkins, dict):
+        historical_jenkins = {
+            key: raw_jenkins[key]
+            for key in ("job_name", "build_number", "result", "timestamp", "duration_ms", "url", "failed_stage")
+            if key in raw_jenkins
+        }
+    historical_payload = {"jenkins": historical_jenkins}
+    if isinstance(raw_history, dict) and isinstance(raw_history.get("github"), dict):
+        historical_payload["github"] = raw_history["github"]
+    historical_evidence = _judge_evidence(
+        historical_payload,
+        focus_text + "\n" + diagnosis_report,
+        include_console_log=False,
+        patch_limit=1500,
+        max_patches=2,
+        console_log_limit=0,
+    )
+    signature_basis = historical_incident.get("signature_basis")
     return (
-        "\n\nHISTORICAL INCIDENT (claimed by Diagnosis as a root-cause match):",
+        "\n\nHISTORICAL INCIDENT (claimed by Diagnosis as a root-cause match):\n"
         f"- Previous incident: {historical_incident.get('job_name', 'Unknown job')} "
-        f"build #{historical_incident.get('build_number', '?')}",
-        f"- Incident id: {historical_incident.get('incident_id', '')}",
-        f"- Exact evidence signature match (recomputed, not Diagnosis's claim): "
-        f"{historical_incident.get('exact_signature_match')}",
-        f"- Recorded resolution method: {historical_incident.get('resolution_method', 'Unknown')}",
+        f"build #{historical_incident.get('build_number', '?')}\n"
+        f"- Its recorded resolution method: {historical_incident.get('resolution_method', 'Unknown')}\n"
+        f"- Backend-recomputed exact_signature_match: {historical_incident.get('exact_signature_match', 'unavailable')}\n"
+        f"- Signature comparison basis: {json.dumps(signature_basis, separators=(',', ':'), default=str) if signature_basis else 'unavailable'}\n"
+        f"- Its diagnosis report:\n{diagnosis_report or '[No diagnosis report stored for this incident.]'}\n"
+        f"- Its bounded provider evidence (historical console log omitted; the backend signature comparison above was computed from it): {json.dumps(historical_evidence, separators=(',', ':'), default=str)}\n"
     )
 
 
@@ -139,11 +240,7 @@ def _unavailable_state(state: InvestigationState, reason: str) -> InvestigationS
     }
 
 def _extract_text(content) -> str:
-    """ChatGroq's .content is always a plain string. ChatGoogleGenerativeAI's
-    .content can instead be a list of parts when thinking is enabled (e.g. a
-    reasoning/thought part plus the actual text part) — this normalizes both
-    shapes to plain text, keeping only text parts and dropping thought/other
-    non-text parts."""
+    """Normalize ChatGroq content to plain text, excluding hidden reasoning."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -164,27 +261,48 @@ def _extract_text(content) -> str:
 def run_llm_judge(state: InvestigationState) -> InvestigationState:
     evidence = state.get("evidence") or {}
     historical_incident = state.get("historical_incident")
+    focus_text = "\n".join([
+        state.get("monitoring_report", ""),
+        state.get("diagnosis_report", ""),
+        state.get("remediation_report", ""),
+        json.dumps([s.get("text", "") for s in state.get("steps") or []]),
+    ])
+    judge_evidence = _judge_evidence(
+        evidence,
+        focus_text,
+        include_console_log=True,
+        patch_limit=1500,
+        max_patches=2,
+        console_log_limit=2500,
+    )
 
     message = (
         f"Audit the investigation of Jenkins job {state['job_name']} build "
         f"#{state['build_number']}.\n\n"
-        f"EVIDENCE:\n{json.dumps(compact_evidence(evidence, include_console_log=True), separators=(',', ':'), default=str)}\n\n"
+        f"EVIDENCE:\n{json.dumps(judge_evidence, separators=(',', ':'), default=str)}\n\n"
         f"MONITORING REPORT:\n{state.get('monitoring_report', '')}\n\n"
         f"DIAGNOSIS REPORT:\n{state.get('diagnosis_report', '')}\n\n"
         f"REMEDIATION REPORT:\n{state.get('remediation_report', '')}\n\n"
         f"PROPOSED STEPS:\n{json.dumps([s.get('text', '') for s in state.get('steps') or []])}"
-        f"{_historical_block(historical_incident)}"
+        f"{_historical_block(historical_incident, focus_text)}"
     )
 
     try:
-        llm = ChatGoogleGenerativeAI(
+        llm = ChatGroq(
             model=settings.judge_model,
-            google_api_key=settings.gemini_api_key,
-            temperature=0,
-            max_output_tokens=4000,
-            timeout=45,          # hard ceiling: never hang the pipeline waiting on Gemini
-            max_retries=1,       # don't silently multiply the wait on transient errors
-            thinking_budget=1500,  # cap reasoning tokens directly, separate from output
+            api_key=settings.judge_api_key,
+            temperature=0.7,
+            # The current Groq organization is limited to 1,000 output
+            # tokens per minute. Keep a compact verdict budget to leave
+            # headroom for other Qwen requests while retaining full evidence.
+            max_tokens=500,
+            timeout=45,
+            max_retries=0,
+            # The organization has a 1,000-token OTPM ceiling. Disable
+            # separately billed hidden reasoning so the completion budget is
+            # available for the required verdict and explanation.
+            reasoning_effort="none",
+            reasoning_format="hidden",
         )
         result = llm.invoke([
             ("system", SYSTEM_PROMPT),
