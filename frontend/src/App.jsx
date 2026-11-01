@@ -1798,7 +1798,17 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
           </details>
 
           <details className="investigation-section">
-            <summary>Trivy image vulnerability scan</summary>
+            <summary>
+              Trivy image vulnerability scan
+              <span className={`trivy-evidence-status ${evidence.trivy?.status === 'success' ? 'is-connected' : ''}`}>
+                <span className={`status-dot ${evidence.trivy?.status === 'success' ? 'green' : 'gray'}`} />
+                {evidence.trivy?.status === 'success'
+                  ? 'Report connected'
+                  : evidence.trivy?.status === 'not_found'
+                    ? 'No report for this build'
+                    : 'Via Jenkins'}
+              </span>
+            </summary>
             <p className="data-caption">
               Scan results archived by Jenkins for this build's exact container image.
             </p>
@@ -2603,7 +2613,13 @@ function IntegrationGrid({ integrations, onConfigure }) {
           <div className="integration-category">{integration.category}</div>
           <p className="integration-description">{integration.description}</p>
           <div className="integration-card-footer">
-            <span className="provider-type">{integration.connected ? 'Live API' : 'Provider'}</span>
+            <span className="provider-type">
+              {integration.id === 'jenkins'
+                ? integration.connected
+                  ? 'Live API · Trivy via Jenkins'
+                  : 'Provider · includes Trivy scans'
+                : integration.connected ? 'Live API' : 'Provider'}
+            </span>
             <button className="configure-button" onClick={() => onConfigure(integration)}>
               {integration.connected ? 'Reconnect' : 'Connect'} <span>→</span>
             </button>

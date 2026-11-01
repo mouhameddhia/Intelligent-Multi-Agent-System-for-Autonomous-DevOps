@@ -3342,3 +3342,18 @@ button:disabled {
   font-weight: 650;
   color: #55566c;
 }
+
+.trivy-evidence-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  color: #9293a2;
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.trivy-evidence-status.is-connected {
+  color: #277650;
+}
