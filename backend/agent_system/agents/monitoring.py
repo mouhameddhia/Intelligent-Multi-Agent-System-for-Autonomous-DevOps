@@ -9,6 +9,7 @@ from .evidence_utils import compact_evidence, build_summary_markdown
 from .confidence import extract_agent_confidence, monitoring_evidence_confidence
 from ..config import settings
 from ..llm_log import record_call, append_call
+from ..local_llm import local_student
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_monitoring_tools
 
@@ -97,13 +98,14 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
     if evidence:
         messages = build_monitoring_messages(state)
         started = time.perf_counter()
-        result = llm.invoke(messages)
+        result = (local_student(max_tokens=2500) or llm).invoke(messages)
 
         raw = result.content
         if not isinstance(raw, str):
             raise TypeError(f"Expected string from Groq, got {type(raw).__name__}")
 
-        finish_reason = (getattr(result, "response_metadata", None) or {}).get("finish_reason")
+        metadata = getattr(result, "response_metadata", None) or {}
+        finish_reason = metadata.get("finish_reason") or metadata.get("done_reason")
         if finish_reason == "length":
             logger.warning(
                 "Monitoring output hit max_tokens; the confidence marker may be missing."

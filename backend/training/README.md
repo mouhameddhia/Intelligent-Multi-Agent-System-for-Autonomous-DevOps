@@ -207,6 +207,31 @@ What the numbers say:
   allows 4,000 tokens and retries once on an empty answer, and never judges or
   pushes an empty file. The table above is after that change.
 
+## 7. Run the local student in PipeGuard
+
+```powershell
+cd backend/training/data/kaggle/qwen3-4b/pipeguard-qwen3-4b-gguf_gguf
+ollama create pipeguard-qwen3-4b -f Modelfile
+```
+
+Then add `LOCAL_LLM_MODEL=pipeguard-qwen3-4b` to `.env` and recreate the backend
+(`docker compose up -d --force-recreate --no-deps backend`). The single-call
+Monitoring and Remediation steps, the ones distilled, then run on Ollama
+(`agent_system/local_llm.py`); Diagnosis, Fix and the tool-calling fallbacks stay on
+gpt-oss-120b. Leave it empty to stay on Groq. Qwen3's `<think>` block is moved out of
+the answer into the logged `reasoning`, so the reports parse as before.
+
+| Setting | Default | |
+|---|---|---|
+| `LOCAL_LLM_URL` | `http://host.docker.internal:11434` | Ollama on the host, seen from the container |
+| `LOCAL_LLM_NUM_CTX` | 8192 | prompts are ~2–3k tokens plus up to 2,500 generated |
+| `LOCAL_LLM_NUM_GPU` | 99 (all layers) | Ollama's estimate left 34–45% of the model on the CPU |
+
+Measured on a GTX 1650 (4 GB) with a held-out shop bug: everything on the GPU
+(3.9 GB), ~43 tokens/s, against 8 tokens/s with Ollama's default split. Monitoring
+took 67 s (989 tokens, including loading the model) and Remediation 34 s (611 tokens),
+against a few seconds on Groq; both named the right failing test and function.
+
 ## Limits
 
 - **Data volume.** 175 teacher runs give 330 examples, small for SFT, and the test
@@ -219,6 +244,5 @@ What the numbers say:
 - **Serving.** gpt-oss-20b and Qwen3-14B need 9–14 GB even in 4-bit, so they cannot run
   on a 4 GB laptop GPU: they are evaluated on Kaggle as the upper bound of what
   distillation achieves. Qwen3-4B is the student meant for local use.
-- **Local latency.** Reasoning adds hundreds of generated tokens per answer. Measured on
-  a GTX 1650 (llama3.2:3b, similar size): ~27 tokens/s, so ~500 reasoning tokens add
-  ~20 s per call.
+- **Local latency.** Reasoning adds hundreds of generated tokens per answer: on a
+  GTX 1650 the local student takes 30–70 s per call instead of a few seconds (section 7).

@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     # Off in production (fewer tokens to transfer); training.generate_dataset
     # turns it on so students can be distilled on reasoning + answer.
     llm_include_reasoning: bool = False
+    # Local fine-tuned student in Ollama (e.g. pipeguard-qwen3-4b). Set, it
+    # runs the single-call Monitoring and Remediation steps; empty keeps Groq.
+    local_llm_model: str = ""
+    local_llm_url: str = "http://host.docker.internal:11434"
+    local_llm_num_ctx: int = 8192
+    # Layers on the GPU. Ollama's own estimate kept a third of Qwen3-4B on the
+    # CPU of a 4 GB GTX 1650 (8 tokens/s); all of them fit and run at ~43.
+    local_llm_num_gpu: int = 99
     agent_port: int = 8001
     use_synthetic: bool = True
 

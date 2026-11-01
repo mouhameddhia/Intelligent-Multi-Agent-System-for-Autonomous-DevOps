@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 
 from ..config import settings
 from ..llm_log import record_call, append_call
+from ..local_llm import local_student
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_remediation_tools
 from .steps import STEP_DELIMITER_START, STEP_DELIMITER_END, split_report_and_steps_json, build_step_dicts
@@ -134,7 +135,7 @@ def run_remediation(state: InvestigationState) -> InvestigationState:
     if evidence:
         messages = build_remediation_messages(state)
         started = time.perf_counter()
-        result = llm.invoke(messages)
+        result = (local_student(max_tokens=2200) or llm).invoke(messages)
         raw_output = result.content
 
         report_text, step_texts = split_report_and_steps_json(raw_output)

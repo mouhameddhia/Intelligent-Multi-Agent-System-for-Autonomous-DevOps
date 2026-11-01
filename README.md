@@ -79,4 +79,6 @@ fine-tuning shows no gain, since every model finds them. On harder, cross-module
 bugs in a webshop project, it significantly improves Monitoring (Qwen3-4B names the
 failing test 73% → 100%, gpt-oss-20b follows the report format 59% → 95%), and both
 fine-tuned students lead their base models on builds fixed (94% and 88% vs. 82% and
-76%), though not significantly on 17 cases. See `backend/training/README.md`.
+76%), though not significantly on 17 cases. Setting `LOCAL_LLM_MODEL` in `.env`
+runs Monitoring and Remediation on the fine-tuned Qwen3-4B in Ollama (30–70 s per
+call on a 4 GB GTX 1650). See `backend/training/README.md`.
