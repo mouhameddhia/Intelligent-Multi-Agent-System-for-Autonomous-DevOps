@@ -328,6 +328,16 @@ function App() {
         jenkins: {
           ...evidence,
           console_log: (evidence.console_log || '').slice(-12000),
+          trivy: evidence.trivy ? {
+            status: evidence.trivy.status,
+            message: evidence.trivy.message,
+            artifact_name: evidence.trivy.artifact_name,
+            artifact_type: evidence.trivy.artifact_type,
+            generated_at: evidence.trivy.generated_at,
+            counts: evidence.trivy.counts,
+            finding_count: evidence.trivy.finding_count,
+            findings: (evidence.trivy.findings || []).slice(0, 10),
+          } : null,
         },
         github: {
           ...github,
@@ -1783,6 +1793,55 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
             {evidence.url && (
               <a className="job-link" href={evidence.url} target="_blank" rel="noreferrer">
                 Open this exact build in Jenkins ↗
+              </a>
+            )}
+          </details>
+
+          <details className="investigation-section">
+            <summary>Trivy image vulnerability scan</summary>
+            <p className="data-caption">
+              Scan results archived by Jenkins for this build's exact container image.
+            </p>
+            {evidence.trivy?.status === 'success' ? (
+              <>
+                <p className="provider-message">
+                  {evidence.trivy.artifact_name || 'Image'} · {evidence.trivy.finding_count ?? 0} vulnerability(ies)
+                  {evidence.trivy.generated_at ? ` · scanned ${formatTimestamp(evidence.trivy.generated_at)}` : ''}
+                  {evidence.trivy.findings_truncated ? ' · showing first 25' : ''}
+                </p>
+                <div className="prometheus-summary">
+                  {Object.entries(evidence.trivy.counts || {}).map(([severity, count]) => (
+                    <div key={severity}><span>{severity}</span><strong>{count}</strong></div>
+                  ))}
+                </div>
+                {evidence.trivy.findings?.length ? (
+                  <div className="investigation-table-wrap">
+                    <table className="prometheus-table">
+                      <thead><tr><th>Severity</th><th>Vulnerability</th><th>Package</th><th>Installed</th><th>Fixed in</th><th>Details</th></tr></thead>
+                      <tbody>
+                        {evidence.trivy.findings.map((finding, index) => (
+                          <tr key={`${finding.id || 'finding'}-${finding.package || index}`}>
+                            <td>{finding.severity || 'UNKNOWN'}</td>
+                            <td>{finding.url ? <a className="job-link" href={finding.url} target="_blank" rel="noreferrer">{finding.id || 'Details'} ↗</a> : finding.id || '—'}</td>
+                            <td>{finding.package || '—'}</td>
+                            <td>{finding.installed_version || '—'}</td>
+                            <td>{finding.fixed_version || '—'}</td>
+                            <td>{finding.title || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="data-caption">Trivy found no image vulnerabilities.</p>}
+              </>
+            ) : (
+              <p className="provider-message">
+                {evidence.trivy?.message || 'Trivy evidence is unavailable.'}
+              </p>
+            )}
+            {evidence.url && evidence.trivy?.status === 'success' && (
+              <a className="job-link" href={`${evidence.url.replace(/\/$/, '')}/artifact/${evidence.trivy.artifact_path || 'reports/trivy-image.json'}`} target="_blank" rel="noreferrer">
+                Open full Trivy JSON report in Jenkins ↗
               </a>
             )}
           </details>

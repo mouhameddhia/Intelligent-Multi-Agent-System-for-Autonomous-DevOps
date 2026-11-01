@@ -1,4 +1,4 @@
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -8,6 +8,10 @@ class JenkinsConnectionError(Exception):
 
 
 class JenkinsConnector:
+    TRIVY_ARTIFACT_PATH = "reports/trivy-image.json"
+    TRIVY_MAX_ARTIFACT_BYTES = 5 * 1024 * 1024
+    TRIVY_MAX_FINDINGS = 25
+
     def __init__(
         self,
         base_url: str,
@@ -196,6 +200,104 @@ class JenkinsConnector:
 
         return response.text
 
+    def _get_optional_json_artifact(self, build_path: str, relative_path: str) -> dict | None:
+        """Fetch a bounded JSON artifact from one exact Jenkins build."""
+        encoded_path = quote(relative_path, safe="/")
+        url = f"{self.base_url}/{build_path}/artifact/{encoded_path}"
+        try:
+            response = httpx.get(
+                url,
+                auth=self.auth,
+                timeout=self.timeout,
+                follow_redirects=False,
+            )
+        except httpx.TimeoutException as exc:
+            raise JenkinsConnectionError("Jenkins timed out while retrieving the Trivy report.") from exc
+        except httpx.RequestError as exc:
+            raise JenkinsConnectionError("Could not reach Jenkins while retrieving the Trivy report.") from exc
+
+        if response.status_code == 404:
+            return None
+        if response.status_code in (401, 403):
+            raise JenkinsConnectionError("Jenkins denied access to the archived Trivy report.")
+        if response.is_redirect:
+            raise JenkinsConnectionError("Jenkins redirected the Trivy report request.")
+        if response.status_code >= 400:
+            raise JenkinsConnectionError(
+                f"Jenkins returned HTTP {response.status_code} while retrieving the Trivy report."
+            )
+        if len(response.content) > self.TRIVY_MAX_ARTIFACT_BYTES:
+            raise JenkinsConnectionError("The archived Trivy report exceeds the 5 MiB safety limit.")
+        try:
+            report = response.json()
+        except ValueError as exc:
+            raise JenkinsConnectionError("The archived Trivy report is not valid JSON.") from exc
+        if not isinstance(report, dict):
+            raise JenkinsConnectionError("The archived Trivy report has an unexpected structure.")
+        return report
+
+    @classmethod
+    def _summarize_trivy_report(cls, report: dict | None, error: str = "") -> dict:
+        if error:
+            return {"status": "unavailable", "message": error}
+        if report is None:
+            return {
+                "status": "not_found",
+                "message": "This build has no archived Trivy image report.",
+            }
+
+        results = report.get("Results")
+        if not isinstance(results, list):
+            return {"status": "invalid", "message": "The Trivy report has no valid Results list."}
+
+        counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
+        findings = []
+        total = 0
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            vulnerabilities = result.get("Vulnerabilities") or []
+            if not isinstance(vulnerabilities, list):
+                continue
+            for item in vulnerabilities:
+                if not isinstance(item, dict):
+                    continue
+                total += 1
+                severity = str(item.get("Severity") or "UNKNOWN").upper()
+                counts[severity if severity in counts else "UNKNOWN"] += 1
+                if len(findings) < cls.TRIVY_MAX_FINDINGS:
+                    vulnerability_url = item.get("PrimaryURL")
+                    findings.append({
+                        "id": item.get("VulnerabilityID"),
+                        "package": item.get("PkgName"),
+                        "installed_version": item.get("InstalledVersion"),
+                        "fixed_version": item.get("FixedVersion"),
+                        "severity": severity,
+                        "title": str(item.get("Title") or "")[:240],
+                        "target": str(result.get("Target") or "")[:240],
+                        "url": (
+                            vulnerability_url
+                            if isinstance(vulnerability_url, str)
+                            and vulnerability_url.startswith("https://")
+                            else None
+                        ),
+                    })
+
+        metadata = report.get("Metadata") if isinstance(report.get("Metadata"), dict) else {}
+        return {
+            "status": "success",
+            "artifact_path": cls.TRIVY_ARTIFACT_PATH,
+            "artifact_name": str(report.get("ArtifactName") or "")[:240],
+            "artifact_type": report.get("ArtifactType"),
+            "generated_at": report.get("CreatedAt"),
+            "schema_version": report.get("SchemaVersion"),
+            "image_id": metadata.get("ImageID"),
+            "counts": counts,
+            "finding_count": total,
+            "findings": findings,
+            "findings_truncated": total > len(findings),
+        }
+
     def get_builds(self, job_name: str, limit: int = 30) -> list[dict]:
         limit = min(max(limit, 1), 100)
         job_path = self._job_path(job_name)
@@ -402,6 +504,7 @@ class JenkinsConnector:
                 "tree": (
                     "number,result,timestamp,duration,building,url,"
                     "displayName,fullDisplayName,"
+                    "artifacts[fileName,relativePath],"
                     "changeSets[items[commitId,msg,timestamp,"
                     "author[fullName]]]"
                 )
@@ -446,6 +549,22 @@ class JenkinsConnector:
                         }
                     )
 
+        artifacts = metadata.get("artifacts") if isinstance(metadata.get("artifacts"), list) else []
+        has_trivy_artifact = any(
+            isinstance(item, dict)
+            and item.get("relativePath") == self.TRIVY_ARTIFACT_PATH
+            for item in artifacts
+        )
+        trivy_report = None
+        trivy_error = ""
+        if has_trivy_artifact:
+            try:
+                trivy_report = self._get_optional_json_artifact(build_path, self.TRIVY_ARTIFACT_PATH)
+                if trivy_report is None:
+                    trivy_error = "Jenkins listed the Trivy report but did not return it for this build."
+            except JenkinsConnectionError as exc:
+                trivy_error = str(exc)
+
         return {
             "job_name": job_name,
             "build_number": build_number,
@@ -458,4 +577,5 @@ class JenkinsConnector:
             "full_display_name": metadata.get("fullDisplayName"),
             "commits": commits,
             "console_log": console_log,
+            "trivy": self._summarize_trivy_report(trivy_report, trivy_error),
         }
