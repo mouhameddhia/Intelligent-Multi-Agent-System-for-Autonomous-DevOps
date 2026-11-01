@@ -13,10 +13,14 @@ fix_ok means the whole suite passes; reverted means the file is back to the
 original, bug-free source. --no-test-file hides the test file from the Fix
 prompt (production shows it), which makes the fix depend on the reports.
 
+For a suite the notebook did not evaluate (the real RunBugRun bugs), --local
+takes the students' answers from training/eval_local.py instead.
+
 Resumable: results already in --out are skipped.
 
     docker compose exec backend python -m training.eval_fix
     docker compose exec backend python -m training.eval_fix --no-test-file
+    docker compose exec backend python -m training.eval_fix --runs training/data/teacher_runs_runbugrun.jsonl         --local training/data/eval_local_runbugrun.jsonl --out training/data/fix_eval_runbugrun.jsonl
 """
 import argparse
 import difflib
@@ -88,6 +92,30 @@ def load_cases(val_path: Path, runs_paths: list[Path], eval_paths: list[Path]) -
     return cases
 
 
+def load_local_cases(runs_paths: list[Path], local_path: Path) -> list[dict]:
+    """One case per (teacher run, answer source), with the students' answers
+    from eval_local.py, matched to their run by id."""
+    answers = {(r["id"], r["model"]): r["output"] for r in _read_jsonl(local_path)
+               if r["agent"] == "remediation" and r["model"] != TEACHER}
+    models = sorted({model for _id, model in answers})
+    cases = []
+    for path in runs_paths:
+        for run in _read_jsonl(path):
+            if run.get("status") != "ok":
+                continue
+            calls = {call["agent"]: call for call in run["llm_calls"]}
+            user = calls["remediation"]["messages"][1]["content"]
+            evidence = run["evidence"]
+            base = {"mutant": run["mutant"], "group": run["id"],
+                    "diagnosis": user.split("DIAGNOSIS REPORT:\n", 1)[1],
+                    "console_log": (evidence.get("jenkins") or evidence).get("console_log", "")}
+            cases.append({**base, "source": TEACHER, "remediation": calls["remediation"]["output"] or ""})
+            cases.append({**base, "source": CONTROL, "remediation": ""})
+            cases.extend({**base, "source": model, "remediation": answers[(run["id"], model)] or ""}
+                         for model in models if (run["id"], model) in answers)
+    return cases
+
+
 def run_fix(llm: ChatGroq, case: dict, with_test_file: bool) -> dict:
     mutant = load_bug(case["mutant"])
     root = PROJECTS[mutant.project]
@@ -130,7 +158,7 @@ def _key(variant: str, source: str, mutant: dict) -> str:
 def summarize(results: list[dict]) -> None:
     table = defaultdict(list)
     for result in results:
-        project = result["mutant"].get("project", "sample_project")
+        project = result["mutant"].get("project", "sample_project").split("/")[0]  # runbugrun/<problem> -> runbugrun
         table[(project, result["variant"], result["source"])].append(result)
     print(f"\n{'project':<15} {'variant':<14} {'remediation from':<26} {'n':>3} {'fix_ok':>7} {'reverted':>9}")
     for (project, variant, source), rows in sorted(table.items()):
@@ -146,6 +174,7 @@ def main() -> None:
                         default=[DATA_DIR / "teacher_runs.jsonl", DATA_DIR / "teacher_runs_shop.jsonl"])
     parser.add_argument("--eval", type=Path, nargs="+",
                         default=sorted((DATA_DIR / "kaggle").glob("*/eval_results_*.jsonl")))
+    parser.add_argument("--local", type=Path, help="students' answers from eval_local.py, instead of --val/--eval")
     parser.add_argument("--out", type=Path, default=DATA_DIR / "fix_eval.jsonl")
     parser.add_argument("--no-test-file", action="store_true", help="hide the test file from the Fix prompt")
     parser.add_argument("--tag", default="", help="label for this run, e.g. after a Fix prompt change")
@@ -160,8 +189,9 @@ def main() -> None:
 
     variant = ("no test file" if args.no_test_file else "production") + (f" [{args.tag}]" if args.tag else "")
     done_keys = {_key(r["variant"], r["source"], r["mutant"]) for r in done}
-    cases = [c for c in load_cases(args.val, [path for path in args.runs if path.exists()], args.eval)
-             if _key(variant, c["source"], c["mutant"]) not in done_keys]
+    runs = [path for path in args.runs if path.exists()]
+    cases = load_local_cases(runs, args.local) if args.local else load_cases(args.val, runs, args.eval)
+    cases = [c for c in cases if _key(variant, c["source"], c["mutant"]) not in done_keys]
     print(f"{len(cases)} Fix runs to do ({variant}), {len(done)} already saved, fix model {settings.llm_model}")
 
     # Same settings as run_apply_fix in agents/fix.py.

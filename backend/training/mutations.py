@@ -13,6 +13,9 @@ from pathlib import Path
 
 SAMPLE_PROJECT = Path(__file__).resolve().parent / "sample_project"
 PROJECTS = {"sample_project": SAMPLE_PROJECT, "sample_shop": SAMPLE_PROJECT.parent / "sample_shop"}
+# Real bugs from RunBugRun, one small project each (written by training/runbugrun.py, git-ignored).
+RUNBUGRUN = SAMPLE_PROJECT.parent / "data" / "runbugrun"
+PROJECTS.update({f"runbugrun/{path.name}": path for path in sorted(RUNBUGRUN.glob("*")) if path.is_dir()})
 
 OPERATOR_SWAPS = {
     "+": ["-"], "-": ["+"], "*": ["/"], "/": ["*"], "//": ["/"], "%": ["//"],

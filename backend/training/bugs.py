@@ -9,9 +9,10 @@ file. Like a Mutant it has an id, a file, a function (the label the agents are
 checked against) and apply(source).
 """
 import ast
+import json
 from dataclasses import dataclass
 
-from .mutations import PROJECTS, Mutant
+from .mutations import PROJECTS, RUNBUGRUN, Mutant
 
 SHOP = "sample_shop"
 
@@ -242,4 +243,17 @@ def shop_bugs() -> list[Bug]:
         bug = Bug(name, file, function, kind, tuple(tuple(edit) for edit in edits))
         bug.apply(source)  # every old text must match the clean file exactly once
         bugs.append(bug)
+    return bugs
+
+
+def runbugrun_bugs() -> list[Bug]:
+    """The real bugs selected by training/runbugrun.py: the project holds the
+    fixed submission, and the bug swaps in the buggy one, so like every Bug it
+    stays inside one file."""
+    bugs = []
+    for path in sorted(RUNBUGRUN.glob("*/bug.json")):
+        meta = json.loads(path.read_text(encoding="utf-8"))
+        fixed = (path.parent / "main.py").read_text(encoding="utf-8")
+        bugs.append(Bug(f"rbr-{meta['id']}", "main.py", meta["function"], meta["kind"],
+                        ((fixed, meta["buggy_code"]),), project=f"runbugrun/{path.parent.name}"))
     return bugs

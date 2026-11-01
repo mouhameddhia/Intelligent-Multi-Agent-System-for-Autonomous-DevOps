@@ -1,7 +1,8 @@
 """Teacher-data generator for fine-tuning (distillation of the production model).
 
 For each bug with a known root cause (single-token mutants of
-training/sample_project, or the hand-written bugs of training/sample_shop):
+training/sample_project, the hand-written bugs of training/sample_shop, or the
+real RunBugRun bugs selected by training/runbugrun.py):
   1. run its test suite; mutants the tests do not catch are skipped,
   2. wrap the pytest output in a Jenkins-style console log and evidence bundle
      shaped exactly like the one the frontend sends,
@@ -13,6 +14,7 @@ a run stopped by Groq's daily limit continues the next day.
 
     docker compose exec backend python -m training.generate_dataset --limit 20
     docker compose exec backend python -m training.generate_dataset --suite shop --limit 20
+    docker compose exec backend python -m training.generate_dataset --suite runbugrun --limit 100
 """
 import argparse
 import difflib
@@ -35,13 +37,14 @@ from agent_system.agents.monitoring import run_monitoring
 from agent_system.agents.remediation import run_remediation
 from agent_system.config import settings
 
-from .bugs import shop_bugs
+from .bugs import runbugrun_bugs, shop_bugs
 from .mutations import PROJECTS, SAMPLE_PROJECT, Mutant, enumerate_mutants
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 SUITES = {
     "mutants": (enumerate_mutants, DATA_DIR / "teacher_runs.jsonl"),
     "shop": (shop_bugs, DATA_DIR / "teacher_runs_shop.jsonl"),
+    "runbugrun": (runbugrun_bugs, DATA_DIR / "teacher_runs_runbugrun.jsonl"),
 }
 
 JOBS = {
@@ -131,7 +134,12 @@ def build_console_log(job: str, sha: str, message: str, pytest_output: str) -> s
 
 def build_evidence(mutant: Mutant, pytest_output: str, rng: random.Random) -> dict:
     """Evidence bundle shaped like the frontend's agentEvidence (App.jsx)."""
-    job = JOBS[mutant.file] if mutant.project == "sample_project" else SHOP_JOB
+    if mutant.project == "sample_project":
+        job = JOBS[mutant.file]
+    elif mutant.project.startswith("runbugrun/"):
+        job = "contest-" + mutant.project.split("/")[1].split("-")[0]  # one job per problem
+    else:
+        job = SHOP_JOB
     build_number = rng.randint(12, 480)
     sha = f"{rng.getrandbits(160):040x}"
     author = rng.choice(AUTHORS)
@@ -280,7 +288,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--limit", type=int, default=20, help="teacher runs to perform in this session")
     parser.add_argument("--suite", choices=SUITES, default="mutants")
-    parser.add_argument("--out", type=Path, help="default: data/teacher_runs.jsonl (mutants) or teacher_runs_shop.jsonl")
+    parser.add_argument("--out", type=Path, help="default: data/teacher_runs[_shop|_runbugrun].jsonl")
     parser.add_argument("--pause", type=float, default=20, help="seconds between teacher runs (Groq TPM)")
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
