@@ -28,7 +28,7 @@ from pathlib import Path
 from langchain_groq import ChatGroq
 
 from agent_system.agents.confidence import extract_agent_confidence
-from agent_system.agents.fix import build_fix_prompt, generate_fix
+from agent_system.agents.fix import _find_test_path_from_text, build_fix_prompt, generate_fix
 from agent_system.agents.steps import split_report_and_steps_json
 from agent_system.config import settings
 
@@ -77,8 +77,9 @@ def load_cases(val_path: Path, runs_paths: list[Path], eval_paths: list[Path]) -
         run = by_prompt[json.dumps(row["messages"][:-1], sort_keys=True)]
         user = row["messages"][1]["content"]
         diagnosis = user.split("DIAGNOSIS REPORT:\n", 1)[1]
+        evidence = run["evidence"]
         base = {"mutant": run["mutant"], "group": row["meta"]["group"], "diagnosis": diagnosis,
-                "failing_tests": run["failing_tests"]}
+                "console_log": (evidence.get("jenkins") or evidence).get("console_log", "")}
         cases.append({**base, "source": TEACHER, "remediation": row["messages"][-1]["content"]})
         cases.append({**base, "source": CONTROL, "remediation": ""})
         for model, rows in answers.items():
@@ -92,10 +93,10 @@ def run_fix(llm: ChatGroq, case: dict, with_test_file: bool) -> dict:
     root = PROJECTS[mutant.project]
     clean = (root / mutant.file).read_text(encoding="utf-8")
     buggy = mutant.apply(clean)
-    # The test file of the first failing test, as the console log names it. For a
-    # shop bug it can belong to another module (often test_orders.py).
-    test_name = case["failing_tests"][0].split("::")[0].split("/")[-1]
-    test_content = (root / "tests" / test_name).read_text(encoding="utf-8") if with_test_file else None
+    # The test file production would pick from the console log: a failing one,
+    # preferably test_<target>.py (a shop bug can also fail other modules' tests).
+    test_name = _find_test_path_from_text(case["console_log"], mutant.file)
+    test_content = (root / test_name).read_text(encoding="utf-8") if with_test_file else None
 
     prompt = build_fix_prompt(
         mutant.file, buggy, test_name if with_test_file else None, test_content,

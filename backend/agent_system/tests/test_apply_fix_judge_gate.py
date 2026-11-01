@@ -116,6 +116,49 @@ class TestJudgeGateBlocksOrAllowsPush:
         assert result["fix_result"]["applied"] is False
 
 
+class TestTestFileShownToTheFixAgent:
+    @patch("agent_system.agents.fix.httpx.put")
+    @patch("agent_system.agents.fix.judge_fix")
+    @patch("agent_system.agents.fix.ChatGroq")
+    @patch("agent_system.agents.fix.httpx.get")
+    @patch("agent_system.agents.fix._pick_target_file")
+    def test_failing_test_is_fetched_from_its_folder(
+        self, mock_pick_target, mock_get, mock_chat_groq, mock_judge, mock_put
+    ):
+        """The verbose log names a passing test file first; the Fix agent must
+        get the failing one, read from tests/ rather than the repo root."""
+        test_source = "def test_fee():\n    assert calculate_refund(100) == 85\n"
+        files = {"refund.py": _ORIGINAL_CONTENT, "tests/test_refund.py": test_source}
+
+        def github_get(url, **_kwargs):
+            path = url.split("/contents/", 1)[1]
+            resp = MagicMock()
+            if path in files:
+                resp.raise_for_status.return_value = None
+                resp.json.return_value = {
+                    "content": base64.b64encode(files[path].encode("utf-8")).decode("ascii"),
+                    "sha": "abc123",
+                }
+            else:
+                resp.raise_for_status.side_effect = Exception(f"404 {path}")
+            return resp
+
+        mock_pick_target.return_value = "refund.py"
+        mock_get.side_effect = github_get
+        mock_chat_groq.return_value = _mock_groq_llm()
+        mock_judge.return_value = {"verdict": "fail", "reasoning": "stop here", "source": "gemini"}
+        state = {**_STATE, "evidence": {"jenkins": {"console_log": (
+            "tests/test_app.py::test_ok PASSED\n"
+            "tests/test_refund.py::test_fee FAILED\n"
+            "FAILED tests/test_refund.py::test_fee - AssertionError\n"
+        )}}}
+
+        run_apply_fix(state)
+
+        assert mock_judge.call_args.kwargs["test_filename"] == "tests/test_refund.py"
+        assert mock_judge.call_args.kwargs["test_content"] == test_source
+
+
 class TestEmptyFixOutput:
     """The fix model can spend its whole token budget on hidden reasoning and
     return an empty file: it is retried once, and never judged or pushed."""

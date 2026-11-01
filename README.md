@@ -33,6 +33,10 @@ own work.
   Fix call's token budget, so it could return an empty file. The budget is
   4,000 tokens, an empty answer is retried once, and an empty file is never
   judged or pushed.
+- **The failing test file**: the Fix agent is shown a test file that really
+  fails (pytest's failure markers, preferring `test_<target file>`), fetched
+  at its full path. It used to take the first test path in the log, a passing
+  one in 85% of 175 recorded builds.
 - Tests: `backend/agent_system/tests/test_judge.py`,
   `test_apply_fix_judge_gate.py` and `test_human_approval_gate.py`. Run
   with `cd backend && pytest agent_system/tests`.
@@ -77,8 +81,8 @@ fix-success benchmark (`training/eval_fix.py`) applies each model's proposal thr
 the production Fix agent and reruns the tests. Results: on single-token mutants
 fine-tuning shows no gain, since every model finds them. On harder, cross-module
 bugs in a webshop project, it significantly improves Monitoring (Qwen3-4B names the
-failing test 73% → 100%, gpt-oss-20b follows the report format 59% → 95%), and both
-fine-tuned students lead their base models on builds fixed (94% and 88% vs. 82% and
-76%), though not significantly on 17 cases. Setting `LOCAL_LLM_MODEL` in `.env`
+failing test 73% → 100%, gpt-oss-20b follows the report format 59% → 95%), while
+builds fixed barely move (94% and 88% vs. 88% and 82% for the base models, not
+significant on 17 cases). Setting `LOCAL_LLM_MODEL` in `.env`
 runs Monitoring and Remediation on the fine-tuned Qwen3-4B in Ollama (30–70 s per
 call on a 4 GB GTX 1650). See `backend/training/README.md`.

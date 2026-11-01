@@ -185,11 +185,11 @@ a validation-loss run would settle it.
 | Remediation from | Build passes | Restored the original exactly | Extra lines, mean |
 |---|---|---|---|
 | gpt-oss-20b fine-tuned | **16/17 (94%)** | 47% | 2.4 |
-| Qwen3-4B fine-tuned | **15/17 (88%)** | 47% | 2.8 |
+| Qwen3-4B fine-tuned | 15/17 (88%) | 47% | 2.8 |
 | Teacher, gpt-oss-120b | 15/17 (88%) | 53% | 2.1 |
-| gpt-oss-20b base | 14/17 (82%) | 59% | 4.4 |
+| gpt-oss-20b base | 15/17 (88%) | 65% | 2.8 |
 | No Remediation report | 14/17 (82%) | 53% | 2.4 |
-| Qwen3-4B base | 13/17 (76%) | 47% | 6.7 |
+| Qwen3-4B base | 14/17 (82%) | 53% | 5.8 |
 
 What the numbers say:
 
@@ -197,15 +197,22 @@ What the numbers say:
   learns to name the failing test (73% → 100%), gpt-oss-20b the report format
   (59% → 95%). Both reach the teacher on these checks.
 - **Remediation does not improve measurably.** The base models already score 94%.
-- **The end result leans towards fine-tuning but is not proven.** Each fine-tuned
-  student fixes 2 more bugs than its base model and loses none (p = 0.5 at n = 17).
-  The control still fixes 82%: the Fix agent works mostly from the Diagnosis and the
-  test file. One bug (`bulk-any-sku`) fails for every source, because the Fix model
-  writes the wrong comparison.
-- **Fix agent robustness.** At `max_tokens=1200`, 6 of 102 Fix answers were empty:
-  gpt-oss-120b's hidden reasoning counts against the budget. `agents/fix.py` now
-  allows 4,000 tokens and retries once on an empty answer, and never judges or
-  pushes an empty file. The table above is after that change.
+- **The end result does not separate the models.** Each fine-tuned student fixes
+  one more bug than its base model and loses none (p = 1.0 at n = 17), and the
+  control still fixes 82%: the Fix agent works mostly from the Diagnosis and the
+  test file. `bulk-any-sku` fails for every source, because the Fix model writes
+  the wrong comparison.
+- **Fix agent robustness**, two production bugs found by this benchmark, both fixed
+  in `agents/fix.py` and the table is after the fixes:
+  - At `max_tokens=1200`, 6 of 102 Fix answers were empty: gpt-oss-120b's hidden
+    reasoning counts against the budget. It now allows 4,000 tokens, retries once on
+    an empty answer, and never judges or pushes an empty file.
+  - The Fix agent was shown the first test file named in the console log. A verbose
+    pytest log lists the passing ones too, so on the 175 recorded builds it picked a
+    file without a failing test 148 times (85%), and fetched it from the repository
+    root, missing a `tests/` folder. It now reads pytest's failure markers, prefers
+    `test_<target file>`, and resolves the full path: right on 175 of 175. The
+    benchmark uses the same choice; it changed the test file for 4 of the 17 bugs.
 
 ## 7. Run the local student in PipeGuard
 

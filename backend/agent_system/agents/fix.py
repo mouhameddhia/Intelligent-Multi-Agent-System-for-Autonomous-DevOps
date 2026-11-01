@@ -121,10 +121,6 @@ def _try_fetch(owner: str, repo: str, token: str, path: str):
         return None, _explain_http_error(exc, owner, repo, path)
 
 
-def _fetch_file_content(owner: str, repo: str, token: str, path: str) -> str | None:
-    return _try_fetch(owner, repo, token, path)[0]
-
-
 def _resolve_repo_path(path: str, owner: str, repo: str, token: str, trace: list):
     """Map a path quoted in a log or an LLM report to a path that exists in the repo.
 
@@ -161,11 +157,31 @@ def _parse_local_imports(source_code: str) -> list[str]:
     return modules
 
 
-def _find_test_filename_from_text(text: str) -> str | None:
-    """Pull the first test-file path mentioned in a console log / traceback."""
+# pytest marks a failure three ways: "FAILED tests/test_x.py::name" (summary),
+# "tests/test_x.py::name FAILED" (verbose) and "tests/test_x.py:21: AssertionError"
+# (traceback). A verbose log also lists every passing test file, so the first
+# test path in the log is usually not a failing one.
+_FAILED_TEST_PATTERNS = (
+    re.compile(r"(?:FAILED|ERROR)\s+([\w\-/\.]+\.py)::"),
+    re.compile(r"([\w\-/\.]+\.py)::\S+\s+(?:FAILED|ERROR)\b"),
+    re.compile(r"^\s*([\w\-/\.]+\.py):\d+:\s+\w*(?:Error|Exception)\b", re.MULTILINE),
+)
+
+
+def _find_test_path_from_text(text: str, target_file: str | None = None) -> str | None:
+    """The test file to show the Fix agent: one with a failing test, preferably
+    test_<target file>; else the first test path the log mentions."""
+    failing: list[str] = []
+    for pattern in _FAILED_TEST_PATTERNS:
+        for path in pattern.findall(text or ""):
+            if "test" in path.split("/")[-1].lower() and path not in failing:
+                failing.append(path)
+    if failing:
+        wanted = "test_" + (target_file or "").split("/")[-1]
+        return next((path for path in failing if path.split("/")[-1] == wanted), failing[0])
     for path in _extract_paths_from_text(text or ""):
-        if "test" in path.lower() and _is_plausible_source_file(path):
-            return path.split("/")[-1]
+        if "test" in path.split("/")[-1].lower() and _is_plausible_source_file(path):
+            return path
     return None
 
 
@@ -360,10 +376,11 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
     evidence = state.get("evidence") or {}
     jenkins_evidence = evidence.get("jenkins") or evidence
     console_log = jenkins_evidence.get("console_log", "") if isinstance(jenkins_evidence, dict) else ""
-    test_filename = _find_test_filename_from_text(console_log)
-    test_content = None
-    if test_filename:
-        test_content = _fetch_file_content(owner, repo, token, test_filename)
+    test_filename, test_content = None, None
+    test_path = _find_test_path_from_text(console_log, target_file)
+    if test_path:
+        # The log's path may carry a workspace prefix or a tests/ folder.
+        test_filename, test_content = _resolve_repo_path(test_path, owner, repo, token, [])
 
     llm = ChatGroq(
         model=settings.llm_model,
