@@ -29,6 +29,22 @@ def _get_collection():
         return None
 
 
+def get_collection(name: str):
+    """Best-effort handle to any collection in the PipeGuard database, or None
+    when MongoDB is unconfigured or unreachable. Used by the learning layer,
+    which keeps its data out of the `incidents` collection."""
+    global _client
+    if not settings.mongodb_uri:
+        return None
+    try:
+        if _client is None:
+            from pymongo import MongoClient
+            _client = MongoClient(settings.mongodb_uri, serverSelectionTimeoutMS=3000)
+        return _client[settings.mongodb_db][name]
+    except Exception:
+        return None
+
+
 def save_incident(doc: dict) -> None:
     """Upsert partial or full incident fields by _id."""
     try:

@@ -18,5 +18,11 @@ class Settings(BaseSettings):
     judge_api_key: str = ""
     judge_model: str = "qwen/qwen3.8-27b"
 
+    # Offline learning layer: background evaluation and policy learning, and
+    # injecting the active policy into the Remediation prompt. False turns all
+    # of it off and leaves Remediation exactly as it was.
+    learning_enabled: bool = True
+    learning_batch_size: int = 5
+
 
 settings = Settings()

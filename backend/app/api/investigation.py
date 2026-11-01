@@ -18,6 +18,7 @@ from agent_system.orchestrator.graph import investigation_graph
 from agent_system.db import save_incident, get_incident, list_incidents
 from agent_system.agents.report_assembly import build_unified_report
 from agent_system.agents.confidence import summarize_confidence, judge_overall_score
+from agent_system.learning.recorder import schedule_record
 
 router = APIRouter(tags=["investigation"])
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "source": request.source,
             "incident_type": request.incident_type,
             "steps": result.get("steps", []),
+            "policy_version_used": result.get("policy_version_used"),
             "solved_step_id": None,
             "status": "awaiting_approval",
             "decision": None,
@@ -252,6 +254,7 @@ def decide(request: DecisionRequest, http_request: Request):
             "fix_result": fix_result,
             "updated_at": _now(),
         })
+        schedule_record(request.incident_id)
 
         if request.decision == "deny":
             message = "Denied by devops engineer. No changes were made."
@@ -450,6 +453,7 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
                 "source": request.source,
                 "incident_type": request.incident_type,
                 "steps": result.get("steps", []),
+                "policy_version_used": result.get("policy_version_used"),
                 "solved_step_id": None,
                 "status": "awaiting_approval",
                 "decision": None,
@@ -598,6 +602,7 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
 
 
         save_incident(doc)
+        schedule_record(incident_id)
 
 
 

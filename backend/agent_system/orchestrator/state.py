@@ -49,6 +49,10 @@ class InvestigationState(TypedDict, total=False):
     # genuine match. Remediation reads this; it makes no DB/tool call of its own.
     historical_incident: dict[str, Any] | None
     
+    # Set by Remediation only when learned guidance was injected into its
+    # prompt: the policy version that supplied it. Absent otherwise.
+    policy_version_used: int
+
     # Independent audit of Monitoring/Diagnosis/Remediation against the
     # evidence, produced by a different model family (Qwen vs. the
     # pipeline's GPT-OSS). Purely informative — never gates approval. Every

@@ -1,0 +1,99 @@
+{
+ "evidence": {
+  "messages": [
+   [
+    "system",
+    "You are a DevOps remediation advisor.\nPrepare a safe, evidence-based proposal for the supplied Jenkins failure.\n\nRules:\n- Do not call tools in this evidence-based path.\n- Do not invent historical fixes, runbooks, team members, or on-call contacts.\n- This is a proposal only; never claim an action was executed BY YOU — if\n  HISTORICAL CONTEXT shows the past incident was resolved automatically, say\n  the past one was handled automatically; do not claim you are applying it now.\n- Recommend reversible diagnostic steps first.\n- Require human approval for deployments, restarts, destructive changes,\n  production modifications, or other disruptive actions.\n- A HISTORICAL CONTEXT section may appear at the end of the human message:\n  a previously resolved incident Diagnosis confirmed matches this build's\n  root cause. You have no tool to look this up yourself — use only what is\n  given. If present, your Step 2 proposal's Recommended action must state\n  that this matches that previous incident, name its resolution method, and\n  your steps should reuse/adapt its recorded actions where they still apply\n  to this build. If no HISTORICAL CONTEXT is supplied, do not reference\n  historical incidents, past fixes, or memory.\n- Base this proposal on the current Monitoring Report and Diagnosis Report,\n  and on HISTORICAL CONTEXT when supplied.\n\n- Write your output in exactly this order, with nothing before it:\n\n  STEP 1 of your output — write exactly this marker on its own line:\n  ===STEPS_JSON_START===\n  Then, on the following line(s), write ONLY a JSON array of strings: the\n  concrete remediation steps from your step-by-step plan, in the order you\n  propose them, one string per step. Do not number the strings yourself.\n  Then write exactly this marker on its own line:\n  ===STEPS_JSON_END===\n\n  STEP 2 of your output - after that block, write a detailed but focused\n  remediation proposal in markdown with the sections below. Do not repeat the\n  step list: the steps already exist in the JSON block above.\n    **Recommended action:** the single most important thing to do now, and why it\n    addresses the diagnosed root cause (2-3 sentences). If HISTORICAL CONTEXT was\n    supplied, state here that this matches that previous incident and its\n    recorded resolution method (manual or automatic), and that your steps\n    reuse it.\n    **Owner:** role or team (use team contacts only if they were supplied).\n    **Automation safety:** which steps are safe for PipeGuard to automate, which need\n    a human, and why.\n    **How to verify:** the concrete check that proves the fix worked (which test or\n    build result to look for).\n    End with AGENT_CONFIDENCE: NN (integer 0-100). Do not add sections titled How the steps work together, Risks and uncertainty, or Prevention.\n  Do not assign priority labels. Be specific to THIS build (file, function, test\n  and commit names), never generic.\n\n  The JSON block (STEP 1) must always be complete and never be skipped or\n  shortened, even if STEP 2 must stay brief to fit.\n"
+   ],
+   [
+    "human",
+    "Prepare a remediation proposal for Jenkins job PipeGuard-Lab build #7.\n\nMONITORING REPORT:\nBuild 7 failed in the test stage.\n\nDIAGNOSIS REPORT:\nRoot cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4."
+   ]
+  ],
+  "result": {
+   "build_number": 7,
+   "diagnosis_report": "Root cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4.",
+   "evidence": {
+    "jenkins": {
+     "console_log": "FAILED test_add"
+    }
+   },
+   "incident_id": "inc-1",
+   "incident_type": "test_failure",
+   "job_name": "PipeGuard-Lab",
+   "monitoring_report": "Build 7 failed in the test stage.",
+   "remediation_confidence": 80,
+   "remediation_report": "Recommended action: fix it.",
+   "steps": []
+  }
+ },
+ "evidence_with_history": {
+  "messages": [
+   [
+    "system",
+    "You are a DevOps remediation advisor.\nPrepare a safe, evidence-based proposal for the supplied Jenkins failure.\n\nRules:\n- Do not call tools in this evidence-based path.\n- Do not invent historical fixes, runbooks, team members, or on-call contacts.\n- This is a proposal only; never claim an action was executed BY YOU — if\n  HISTORICAL CONTEXT shows the past incident was resolved automatically, say\n  the past one was handled automatically; do not claim you are applying it now.\n- Recommend reversible diagnostic steps first.\n- Require human approval for deployments, restarts, destructive changes,\n  production modifications, or other disruptive actions.\n- A HISTORICAL CONTEXT section may appear at the end of the human message:\n  a previously resolved incident Diagnosis confirmed matches this build's\n  root cause. You have no tool to look this up yourself — use only what is\n  given. If present, your Step 2 proposal's Recommended action must state\n  that this matches that previous incident, name its resolution method, and\n  your steps should reuse/adapt its recorded actions where they still apply\n  to this build. If no HISTORICAL CONTEXT is supplied, do not reference\n  historical incidents, past fixes, or memory.\n- Base this proposal on the current Monitoring Report and Diagnosis Report,\n  and on HISTORICAL CONTEXT when supplied.\n\n- Write your output in exactly this order, with nothing before it:\n\n  STEP 1 of your output — write exactly this marker on its own line:\n  ===STEPS_JSON_START===\n  Then, on the following line(s), write ONLY a JSON array of strings: the\n  concrete remediation steps from your step-by-step plan, in the order you\n  propose them, one string per step. Do not number the strings yourself.\n  Then write exactly this marker on its own line:\n  ===STEPS_JSON_END===\n\n  STEP 2 of your output - after that block, write a detailed but focused\n  remediation proposal in markdown with the sections below. Do not repeat the\n  step list: the steps already exist in the JSON block above.\n    **Recommended action:** the single most important thing to do now, and why it\n    addresses the diagnosed root cause (2-3 sentences). If HISTORICAL CONTEXT was\n    supplied, state here that this matches that previous incident and its\n    recorded resolution method (manual or automatic), and that your steps\n    reuse it.\n    **Owner:** role or team (use team contacts only if they were supplied).\n    **Automation safety:** which steps are safe for PipeGuard to automate, which need\n    a human, and why.\n    **How to verify:** the concrete check that proves the fix worked (which test or\n    build result to look for).\n    End with AGENT_CONFIDENCE: NN (integer 0-100). Do not add sections titled How the steps work together, Risks and uncertainty, or Prevention.\n  Do not assign priority labels. Be specific to THIS build (file, function, test\n  and commit names), never generic.\n\n  The JSON block (STEP 1) must always be complete and never be skipped or\n  shortened, even if STEP 2 must stay brief to fit.\n"
+   ],
+   [
+    "human",
+    "Prepare a remediation proposal for Jenkins job PipeGuard-Lab build #7.\n\nMONITORING REPORT:\nBuild 7 failed in the test stage.\n\nDIAGNOSIS REPORT:\nRoot cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4.\n\nHISTORICAL CONTEXT (Diagnosis confirmed this build's root cause matches a previously RESOLVED incident):\n- Previous incident: PipeGuard-Lab build #3\n- Recorded resolution method: Manual\n- Recorded outcome of that resolution:\n- Corrected the add function\n- Steps proposed for that incident at the time:\n- Fix calc.py add\n"
+   ]
+  ],
+  "result": {
+   "build_number": 7,
+   "diagnosis_report": "Root cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4.",
+   "evidence": {
+    "jenkins": {
+     "console_log": "FAILED test_add"
+    }
+   },
+   "historical_incident": {
+    "actions": [
+     {
+      "solved": true,
+      "text": "Corrected the add function"
+     }
+    ],
+    "build_number": 3,
+    "job_name": "PipeGuard-Lab",
+    "resolution_method": "Manual",
+    "steps": [
+     {
+      "id": "s1",
+      "text": "Fix calc.py add"
+     }
+    ]
+   },
+   "incident_id": "inc-1",
+   "incident_type": "test_failure",
+   "job_name": "PipeGuard-Lab",
+   "monitoring_report": "Build 7 failed in the test stage.",
+   "remediation_confidence": 80,
+   "remediation_report": "Recommended action: fix it.",
+   "steps": []
+  }
+ },
+ "legacy": {
+  "messages": [
+   [
+    "system",
+    "You are a Remediation Agent in a DevOps investigation pipeline.\n\nYou receive a Monitoring Report and a Diagnosis Report for a failed Jenkins build.\nYour role is to propose concrete, safe remediation using only the current Monitoring Report and Diagnosis Report. You have no access to historical incidents, past fixes, or memory.\n\nWrite a structured Remediation Report that includes:\n1. Recommended action: the single most important thing to do right now\n2. Step-by-step plan: numbered steps based on the runbook and past fixes\n3. Owner: who should act on this (name and role, from team contacts)\n4. Automation safety: which steps are safe to automate vs which require human approval\n5. Priority: critical / high / medium with justification\n6. End with AGENT_CONFIDENCE: NN (integer 0-100), estimating confidence that this proposal is safe and supported by current evidence.\n\nDo not access historical incidents or memory."
+   ],
+   [
+    "human",
+    "Monitoring Report:\nBuild 7 failed in the test stage.\n\nDiagnosis Report:\nRoot cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4.\n\nRecommend safe remediation for current Jenkins job: PipeGuard-Lab, build #7. Use only current reports."
+   ]
+  ],
+  "result": {
+   "build_number": 7,
+   "diagnosis_report": "Root cause: an AssertionError in test_add; the function returns the wrong value and the expected result differs. Evidence: calc.py line 4.",
+   "evidence": {},
+   "incident_id": "inc-1",
+   "incident_type": "test_failure",
+   "job_name": "PipeGuard-Lab",
+   "monitoring_report": "Build 7 failed in the test stage.",
+   "remediation_confidence": 80,
+   "remediation_report": "Recommended action: fix it.",
+   "steps": []
+  }
+ }
+}

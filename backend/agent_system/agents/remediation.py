@@ -4,6 +4,7 @@ from langchain_groq import ChatGroq
 from langchain.agents import create_agent
 
 from ..config import settings
+from ..learning.injection import SYSTEM_RULE, get_guidance
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_remediation_tools
 from .steps import STEP_DELIMITER_START, STEP_DELIMITER_END, split_report_and_steps_json, build_step_dicts
@@ -50,6 +51,16 @@ def _historical_context_block(historical_incident: dict | None) -> str:
         parts.append(f"- Steps proposed for that incident at the time:\n{past_steps_text}")
     return "\n".join(parts) + "\n"
 
+def _guidance_block(guidance: str) -> str:
+    """Learned, advisory guidance for the human message; empty when there is none."""
+    return f"\n\n{guidance}" if guidance else ""
+
+_LEGACY_GUIDANCE_NOTE = (
+    "\nA 'Learned guidance' section may follow in the message: advisory general "
+    "lessons, not historical incidents or memory. Use it only where it fits the "
+    "reports, and never let it weaken approval requirements."
+)
+
 def run_remediation(state: InvestigationState) -> InvestigationState:
     llm = ChatGroq(
         model=settings.llm_model,
@@ -60,6 +71,12 @@ def run_remediation(state: InvestigationState) -> InvestigationState:
     )
 
     evidence = state.get("evidence") or {}
+
+    # Advisory lessons from the learning layer; ("", None) when there is no
+    # active policy, in which case nothing below differs from the old prompts.
+    guidance, policy_version = get_guidance(state)
+    guidance_rule = SYSTEM_RULE if guidance else ""
+    policy_state = {"policy_version_used": policy_version} if policy_version is not None else {}
 
     if evidence:
         grounded_prompt = f"""You are a DevOps remediation advisor.
@@ -84,7 +101,7 @@ Rules:
   historical incidents, past fixes, or memory.
 - Base this proposal on the current Monitoring Report and Diagnosis Report,
   and on HISTORICAL CONTEXT when supplied.
-
+{guidance_rule}
 - Write your output in exactly this order, with nothing before it:
 
   STEP 1 of your output — write exactly this marker on its own line:
@@ -121,6 +138,7 @@ Rules:
             f"MONITORING REPORT:\n{state['monitoring_report']}\n\n"
             f"DIAGNOSIS REPORT:\n{state['diagnosis_report']}"
             f"{_historical_context_block(state.get('historical_incident'))}"
+            f"{_guidance_block(guidance)}"
         )
         result = llm.invoke([
             ("system", grounded_prompt),
@@ -132,19 +150,20 @@ Rules:
         report_text, confidence = extract_agent_confidence(report_text)
         steps = build_step_dicts(step_texts) if step_texts else []
 
-        return {**state, "remediation_report": report_text, "remediation_confidence": confidence, "steps": steps}
+        return {**state, "remediation_report": report_text, "remediation_confidence": confidence, "steps": steps, **policy_state}
 
     # Legacy path is LLM-only: no past-fix tools or memory.
     message = (
         f"Monitoring Report:\n{state['monitoring_report']}\n\n"
         f"Diagnosis Report:\n{state['diagnosis_report']}\n\n"
         f"Recommend safe remediation for current Jenkins job: {state['job_name']}, build #{state['build_number']}. Use only current reports."
+        f"{_guidance_block(guidance)}"
     )
     result = llm.invoke([
-        ("system", SYSTEM_PROMPT + "\nDo not access historical incidents or memory."),
+        ("system", SYSTEM_PROMPT + "\nDo not access historical incidents or memory." + (_LEGACY_GUIDANCE_NOTE if guidance else "")),
         ("human", message),
     ])
     report = result.content
 
     report, confidence = extract_agent_confidence(report)
-    return {**state, "remediation_report": report, "remediation_confidence": confidence}
+    return {**state, "remediation_report": report, "remediation_confidence": confidence, **policy_state}

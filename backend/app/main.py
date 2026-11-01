@@ -56,3 +56,5 @@ from app.api.github import router as github_router
 app.include_router(github_router)
 app.include_router(prometheus_router)
 app.include_router(investigation_router)
+from app.api.learning import router as learning_router
+app.include_router(learning_router)
