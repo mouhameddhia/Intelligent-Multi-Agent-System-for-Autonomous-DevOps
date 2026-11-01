@@ -1,6 +1,7 @@
 """Teacher-data generator for fine-tuning (distillation of the production model).
 
-For each single-token mutant of training/sample_project:
+For each bug with a known root cause (single-token mutants of
+training/sample_project, or the hand-written bugs of training/sample_shop):
   1. run its test suite; mutants the tests do not catch are skipped,
   2. wrap the pytest output in a Jenkins-style console log and evidence bundle
      shaped exactly like the one the frontend sends,
@@ -11,8 +12,10 @@ Resumable: one JSON line per mutant; mutants already in --out are skipped, so
 a run stopped by Groq's daily limit continues the next day.
 
     docker compose exec backend python -m training.generate_dataset --limit 20
+    docker compose exec backend python -m training.generate_dataset --suite shop --limit 20
 """
 import argparse
+import difflib
 import json
 import random
 import re
@@ -32,9 +35,14 @@ from agent_system.agents.monitoring import run_monitoring
 from agent_system.agents.remediation import run_remediation
 from agent_system.config import settings
 
-from .mutations import SAMPLE_PROJECT, Mutant, enumerate_mutants
+from .bugs import shop_bugs
+from .mutations import PROJECTS, SAMPLE_PROJECT, Mutant, enumerate_mutants
 
-DEFAULT_OUT = Path(__file__).resolve().parent / "data" / "teacher_runs.jsonl"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+SUITES = {
+    "mutants": (enumerate_mutants, DATA_DIR / "teacher_runs.jsonl"),
+    "shop": (shop_bugs, DATA_DIR / "teacher_runs_shop.jsonl"),
+}
 
 JOBS = {
     "pricing.py": "shop-checkout",
@@ -43,6 +51,7 @@ JOBS = {
     "stats.py": "metrics-dashboard",
     "scheduling.py": "room-booking",
 }
+SHOP_JOB = "webshop-backend"  # sample_shop is one service: every file builds in the same job
 AUTHORS = ["Amira Ben Salem", "Youssef Trabelsi", "Lina Haddad", "Karim Mansour", "Sarra Jlassi"]
 COMMIT_MESSAGES = [
     "Refactor {function} in {file}",
@@ -58,16 +67,17 @@ COMMIT_MESSAGES = [
 # ---------------------------------------------------------------------------
 
 def run_tests(mutant: Mutant) -> tuple[bool, str, list[str]]:
-    """Run the mutated project's tests. Returns (passed, pytest output, failing test ids)."""
-    source = (SAMPLE_PROJECT / mutant.file).read_text(encoding="utf-8")
-    return run_suite({mutant.file: mutant.apply(source)})
+    """Run the buggy project's tests. Returns (passed, pytest output, failing test ids)."""
+    root = PROJECTS[mutant.project]
+    source = (root / mutant.file).read_text(encoding="utf-8")
+    return run_suite({mutant.file: mutant.apply(source)}, root)
 
 
-def run_suite(files: dict[str, str]) -> tuple[bool, str, list[str]]:
-    """Run the sample project's tests with some files replaced ({path: content})."""
+def run_suite(files: dict[str, str], root: Path = SAMPLE_PROJECT) -> tuple[bool, str, list[str]]:
+    """Run a sample project's tests with some files replaced ({path: content})."""
     with tempfile.TemporaryDirectory() as tmp:
         project = Path(tmp) / "project"
-        shutil.copytree(SAMPLE_PROJECT, project, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(root, project, ignore=shutil.ignore_patterns("__pycache__"))
         for name, content in files.items():
             (project / name).write_text(content, encoding="utf-8")
 
@@ -121,7 +131,7 @@ def build_console_log(job: str, sha: str, message: str, pytest_output: str) -> s
 
 def build_evidence(mutant: Mutant, pytest_output: str, rng: random.Random) -> dict:
     """Evidence bundle shaped like the frontend's agentEvidence (App.jsx)."""
-    job = JOBS[mutant.file]
+    job = JOBS[mutant.file] if mutant.project == "sample_project" else SHOP_JOB
     build_number = rng.randint(12, 480)
     sha = f"{rng.getrandbits(160):040x}"
     author = rng.choice(AUTHORS)
@@ -146,7 +156,12 @@ def build_evidence(mutant: Mutant, pytest_output: str, rng: random.Random) -> di
     # Some builds have no GitHub evidence, and some commits also touch an
     # unrelated file, so the model learns that a changed file is a lead, not proof.
     if rng.random() < 0.8:
-        files = [{"filename": mutant.file, "status": "modified", "additions": 1, "deletions": 1, "changes": 2}]
+        source = (PROJECTS[mutant.project] / mutant.file).read_text(encoding="utf-8")
+        diff = list(difflib.unified_diff(source.splitlines(), mutant.apply(source).splitlines(), lineterm="", n=0))
+        additions = sum(line.startswith("+") and not line.startswith("+++") for line in diff)
+        deletions = sum(line.startswith("-") and not line.startswith("---") for line in diff)
+        files = [{"filename": mutant.file, "status": "modified", "additions": additions,
+                  "deletions": deletions, "changes": additions + deletions}]
         if rng.random() < 0.3:
             extra = rng.randint(1, 12)
             files.append({"filename": "README.md", "status": "modified", "additions": extra, "deletions": 0, "changes": extra})
@@ -264,7 +279,8 @@ def _done_ids(out: Path) -> set[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--limit", type=int, default=20, help="teacher runs to perform in this session")
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--suite", choices=SUITES, default="mutants")
+    parser.add_argument("--out", type=Path, help="default: data/teacher_runs.jsonl (mutants) or teacher_runs_shop.jsonl")
     parser.add_argument("--pause", type=float, default=20, help="seconds between teacher runs (Groq TPM)")
     parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
@@ -273,11 +289,13 @@ def main() -> None:
     # are distilled on reasoning + answer, not on the answer alone.
     settings.llm_include_reasoning = True
 
+    enumerate_bugs, default_out = SUITES[args.suite]
+    args.out = args.out or default_out
     args.out.parent.mkdir(parents=True, exist_ok=True)
     done = _done_ids(args.out)
-    mutants = enumerate_mutants()
+    mutants = enumerate_bugs()
     random.Random(args.seed).shuffle(mutants)  # spread early runs across all files and functions
-    print(f"{len(mutants)} mutants, {len(done)} already processed, teacher model {settings.llm_model}")
+    print(f"{len(mutants)} bugs, {len(done)} already processed, teacher model {settings.llm_model}")
 
     completed = 0
     for mutant in mutants:

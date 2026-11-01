@@ -28,12 +28,13 @@ from pathlib import Path
 from langchain_groq import ChatGroq
 
 from agent_system.agents.confidence import extract_agent_confidence
-from agent_system.agents.fix import build_fix_prompt, clean_fix_output
+from agent_system.agents.fix import build_fix_prompt, generate_fix
 from agent_system.agents.steps import split_report_and_steps_json
 from agent_system.config import settings
 
+from .bugs import load_bug
 from .generate_dataset import DailyLimitReached, _with_rate_limit, run_suite
-from .mutations import SAMPLE_PROJECT, Mutant
+from .mutations import PROJECTS
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TEACHER = "teacher (gpt-oss-120b)"
@@ -52,9 +53,9 @@ def _remediation_report(output: str) -> str:
     return extract_agent_confidence(report)[0]
 
 
-def load_cases(val_path: Path, runs_path: Path, eval_paths: list[Path]) -> list[dict]:
+def load_cases(val_path: Path, runs_paths: list[Path], eval_paths: list[Path]) -> list[dict]:
     """One case per (held-out example, answer source)."""
-    runs = [run for run in _read_jsonl(runs_path) if run.get("status") == "ok"]
+    runs = [run for path in runs_paths for run in _read_jsonl(path) if run.get("status") == "ok"]
     by_prompt = {}
     for run in runs:
         for call in run["llm_calls"]:
@@ -76,7 +77,8 @@ def load_cases(val_path: Path, runs_path: Path, eval_paths: list[Path]) -> list[
         run = by_prompt[json.dumps(row["messages"][:-1], sort_keys=True)]
         user = row["messages"][1]["content"]
         diagnosis = user.split("DIAGNOSIS REPORT:\n", 1)[1]
-        base = {"mutant": run["mutant"], "group": row["meta"]["group"], "diagnosis": diagnosis}
+        base = {"mutant": run["mutant"], "group": row["meta"]["group"], "diagnosis": diagnosis,
+                "failing_tests": run["failing_tests"]}
         cases.append({**base, "source": TEACHER, "remediation": row["messages"][-1]["content"]})
         cases.append({**base, "source": CONTROL, "remediation": ""})
         for model, rows in answers.items():
@@ -86,20 +88,23 @@ def load_cases(val_path: Path, runs_path: Path, eval_paths: list[Path]) -> list[
 
 
 def run_fix(llm: ChatGroq, case: dict, with_test_file: bool) -> dict:
-    mutant = Mutant(**case["mutant"])
-    clean = (SAMPLE_PROJECT / mutant.file).read_text(encoding="utf-8")
+    mutant = load_bug(case["mutant"])
+    root = PROJECTS[mutant.project]
+    clean = (root / mutant.file).read_text(encoding="utf-8")
     buggy = mutant.apply(clean)
-    test_name = f"test_{mutant.file}"
-    test_content = (SAMPLE_PROJECT / "tests" / test_name).read_text(encoding="utf-8") if with_test_file else None
+    # The test file of the first failing test, as the console log names it. For a
+    # shop bug it can belong to another module (often test_orders.py).
+    test_name = case["failing_tests"][0].split("::")[0].split("/")[-1]
+    test_content = (root / "tests" / test_name).read_text(encoding="utf-8") if with_test_file else None
 
     prompt = build_fix_prompt(
         mutant.file, buggy, test_name if with_test_file else None, test_content,
         case["diagnosis"], _remediation_report(case["remediation"]),
     )
     started = time.perf_counter()
-    result = _with_rate_limit(lambda _state: llm.invoke([("human", prompt)]), {})
-    new_content = clean_fix_output(result.content)
-    passed, _output, failing = run_suite({mutant.file: new_content})
+    new_content, result = generate_fix(
+        lambda text: _with_rate_limit(lambda _state: llm.invoke([("human", text)]), {}), prompt)
+    passed, _output, failing = run_suite({mutant.file: new_content}, root)
 
     changed = [
         line for line in difflib.unified_diff(clean.splitlines(), new_content.splitlines(), lineterm="", n=0)
@@ -118,24 +123,26 @@ def run_fix(llm: ChatGroq, case: dict, with_test_file: bool) -> dict:
 
 
 def _key(variant: str, source: str, mutant: dict) -> str:
-    return f"{variant}|{source}|{Mutant(**mutant).id}"
+    return f"{variant}|{source}|{load_bug(mutant).id}"
 
 
 def summarize(results: list[dict]) -> None:
     table = defaultdict(list)
     for result in results:
-        table[(result["variant"], result["source"])].append(result)
-    print(f"\n{'variant':<14} {'remediation from':<26} {'n':>3} {'fix_ok':>7} {'reverted':>9}")
-    for (variant, source), rows in sorted(table.items()):
+        project = result["mutant"].get("project", "sample_project")
+        table[(project, result["variant"], result["source"])].append(result)
+    print(f"\n{'project':<15} {'variant':<14} {'remediation from':<26} {'n':>3} {'fix_ok':>7} {'reverted':>9}")
+    for (project, variant, source), rows in sorted(table.items()):
         ok = sum(r["fix_ok"] for r in rows)
         reverted = sum(r["reverted"] for r in rows)
-        print(f"{variant:<14} {source:<26} {len(rows):>3} {ok / len(rows):>7.0%} {reverted / len(rows):>9.0%}")
+        print(f"{project:<15} {variant:<14} {source:<26} {len(rows):>3} {ok / len(rows):>7.0%} {reverted / len(rows):>9.0%}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--val", type=Path, default=DATA_DIR / "sft" / "val.jsonl")
-    parser.add_argument("--runs", type=Path, default=DATA_DIR / "teacher_runs.jsonl")
+    parser.add_argument("--runs", type=Path, nargs="+",
+                        default=[DATA_DIR / "teacher_runs.jsonl", DATA_DIR / "teacher_runs_shop.jsonl"])
     parser.add_argument("--eval", type=Path, nargs="+",
                         default=sorted((DATA_DIR / "kaggle").glob("*/eval_results_*.jsonl")))
     parser.add_argument("--out", type=Path, default=DATA_DIR / "fix_eval.jsonl")
@@ -152,13 +159,13 @@ def main() -> None:
 
     variant = ("no test file" if args.no_test_file else "production") + (f" [{args.tag}]" if args.tag else "")
     done_keys = {_key(r["variant"], r["source"], r["mutant"]) for r in done}
-    cases = [c for c in load_cases(args.val, args.runs, args.eval)
+    cases = [c for c in load_cases(args.val, [path for path in args.runs if path.exists()], args.eval)
              if _key(variant, c["source"], c["mutant"]) not in done_keys]
     print(f"{len(cases)} Fix runs to do ({variant}), {len(done)} already saved, fix model {settings.llm_model}")
 
     # Same settings as run_apply_fix in agents/fix.py.
     llm = ChatGroq(model=settings.llm_model, api_key=settings.groq_api_key, temperature=0,
-                   max_tokens=1200, model_kwargs={"include_reasoning": False})
+                   max_tokens=4000, model_kwargs={"include_reasoning": False})
     for number, case in enumerate(cases, 1):
         try:
             outcome = run_fix(llm, case, with_test_file=not args.no_test_file)
@@ -170,7 +177,7 @@ def main() -> None:
         with args.out.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
         done.append(record)
-        print(f"[{number}/{len(cases)}] {case['source']:<26} {Mutant(**case['mutant']).id:<40} "
+        print(f"[{number}/{len(cases)}] {case['source']:<26} {load_bug(case['mutant']).id:<40} "
               f"fix_ok={outcome['fix_ok']} reverted={outcome['reverted']} tokens={outcome['tokens']}", flush=True)
         time.sleep(args.pause)
 

@@ -6,6 +6,7 @@ notebooks are created private.
 
     python -m training.kaggle_runner upload-data              # data/sft -> Kaggle dataset
     python -m training.kaggle_runner train --model qwen3-4b   # run, wait, download results
+    python -m training.kaggle_runner download --model qwen3-4b  # results of a finished run
 
 Results land in training/data/kaggle/<model>/ (adapter zip, eval summary, log).
 """
@@ -97,13 +98,20 @@ def push_notebook(user: str, model: str) -> str:
 def wait_and_download(ref: str, model: str, poll_seconds: int) -> None:
     started = time.monotonic()
     while True:
-        status = kaggle("kernels", "status", ref, check=False)
+        output = kaggle("kernels", "status", ref, check=False)
         elapsed = (time.monotonic() - started) / 60
+        # Only trust Kaggle's status line: a network failure prints a traceback
+        # (e.g. "SSLError") that must not be taken for a finished run.
+        match = re.search(r'has status "([^"]+)"', output)
+        status = match.group(1) if match else "unknown (status check failed, retrying)"
         print(f"[{elapsed:5.1f} min] {status}", flush=True)
-        if re.search(r"complete|error|cancel", status, re.I):
+        if re.search(r"complete|error|cancel", status, re.I) and match:
             break
         time.sleep(poll_seconds)
+    download(ref, model, status)
 
+
+def download(ref: str, model: str, status: str = "complete") -> None:
     out = RESULTS_DIR / model
     out.mkdir(parents=True, exist_ok=True)
     print(kaggle("kernels", "output", ref, "-p", str(out), "--force", check=False))
@@ -120,11 +128,16 @@ def main() -> None:
     train.add_argument("--model", choices=MODELS, required=True)
     train.add_argument("--no-wait", action="store_true", help="push and return without waiting")
     train.add_argument("--poll", type=int, default=120, help="seconds between status checks")
+    fetch = commands.add_parser("download", help="download the results of a finished run")
+    fetch.add_argument("--model", choices=MODELS, required=True)
     args = parser.parse_args()
 
     user = username()
     if args.command == "upload-data":
         upload_data(user)
+        return
+    if args.command == "download":
+        download(f"{user}/pipeguard-qlora-{args.model}", args.model)
         return
     ref = push_notebook(user, args.model)
     if not args.no_wait:

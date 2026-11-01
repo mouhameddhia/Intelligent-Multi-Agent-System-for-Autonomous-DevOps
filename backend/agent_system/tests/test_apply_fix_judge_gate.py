@@ -114,3 +114,50 @@ class TestJudgeGateBlocksOrAllowsPush:
 
         assert not mock_put.called, "GitHub push must NEVER happen when the judge could not be reached"
         assert result["fix_result"]["applied"] is False
+
+
+class TestEmptyFixOutput:
+    """The fix model can spend its whole token budget on hidden reasoning and
+    return an empty file: it is retried once, and never judged or pushed."""
+
+    @patch("agent_system.agents.fix.httpx.put")
+    @patch("agent_system.agents.fix.judge_fix")
+    @patch("agent_system.agents.fix.ChatGroq")
+    @patch("agent_system.agents.fix.httpx.get")
+    @patch("agent_system.agents.fix._pick_target_file")
+    def test_empty_answer_is_retried_once(
+        self, mock_pick_target, mock_get, mock_chat_groq, mock_judge, mock_put
+    ):
+        mock_pick_target.return_value = "refund.py"
+        mock_get.return_value = _mock_github_get_response()
+        llm = MagicMock()
+        llm.invoke.side_effect = [MagicMock(content=""), MagicMock(content=_NEW_CONTENT)]
+        mock_chat_groq.return_value = llm
+        mock_judge.return_value = {"verdict": "fail", "reasoning": "stop here", "source": "gemini"}
+
+        run_apply_fix(dict(_STATE))
+
+        assert llm.invoke.call_count == 2
+        assert mock_judge.call_args.kwargs["new_content"] == _NEW_CONTENT.strip()
+
+    @patch("agent_system.agents.fix.httpx.put")
+    @patch("agent_system.agents.fix.judge_fix")
+    @patch("agent_system.agents.fix.ChatGroq")
+    @patch("agent_system.agents.fix.httpx.get")
+    @patch("agent_system.agents.fix._pick_target_file")
+    def test_empty_twice_is_neither_judged_nor_pushed(
+        self, mock_pick_target, mock_get, mock_chat_groq, mock_judge, mock_put
+    ):
+        mock_pick_target.return_value = "refund.py"
+        mock_get.return_value = _mock_github_get_response()
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content="   ")
+        mock_chat_groq.return_value = llm
+
+        result = run_apply_fix(dict(_STATE))
+
+        assert llm.invoke.call_count == 2
+        assert not mock_judge.called
+        assert not mock_put.called
+        assert result["fix_result"]["applied"] is False
+        assert "empty" in result["fix_result"]["message"]

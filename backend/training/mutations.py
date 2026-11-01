@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SAMPLE_PROJECT = Path(__file__).resolve().parent / "sample_project"
+PROJECTS = {"sample_project": SAMPLE_PROJECT, "sample_shop": SAMPLE_PROJECT.parent / "sample_shop"}
 
 OPERATOR_SWAPS = {
     "+": ["-"], "-": ["+"], "*": ["/"], "/": ["*"], "//": ["/"], "%": ["//"],
@@ -28,6 +29,7 @@ class Mutant:
     col: int
     original: str
     mutated: str
+    project: str = "sample_project"
 
     @property
     def id(self) -> str:

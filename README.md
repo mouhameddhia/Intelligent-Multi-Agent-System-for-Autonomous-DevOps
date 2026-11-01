@@ -29,6 +29,10 @@ own work.
   included, exactly as it was. Measured on 60 fixes, this took the diff from
   20 extra lines on average to none, and builds passing from 95% to 100%
   (`backend/training/eval_fix.py`).
+- **No empty fixes**: gpt-oss-120b's hidden reasoning counts against the
+  Fix call's token budget, so it could return an empty file. The budget is
+  4,000 tokens, an empty answer is retried once, and an empty file is never
+  judged or pushed.
 - Tests: `backend/agent_system/tests/test_judge.py`,
   `test_apply_fix_judge_gate.py` and `test_human_approval_gate.py`. Run
   with `cd backend && pytest agent_system/tests`.
@@ -67,9 +71,12 @@ incident in MongoDB as `llm_calls`, which is the training data for fine-tuning.
 `backend/training/` distils the production model's reasoning and answers
 (gpt-oss-120b) into LoRA adapters for Monitoring and Remediation, on Qwen3-4B
 (runs locally in Ollama) and gpt-oss-20b (strongest that trains on a free Kaggle
-T4): a mutation-based data generator with automatic labels, an exporter, and one
-Kaggle notebook that trains, evaluates and exports either student. A fix-success
-benchmark (`training/eval_fix.py`) applies each model's proposal through the
-production Fix agent and reruns the tests. Result so far: on the sample project's
-single-token bugs, fine-tuning shows no measurable gain, and a local Qwen3-4B gives
-the same end result as gpt-oss-120b. See `backend/training/README.md`.
+T4): a data generator over two sample projects with automatic labels, an exporter,
+and one Kaggle notebook that trains, evaluates and exports either student. A
+fix-success benchmark (`training/eval_fix.py`) applies each model's proposal through
+the production Fix agent and reruns the tests. Results: on single-token mutants
+fine-tuning shows no gain, since every model finds them. On harder, cross-module
+bugs in a webshop project, it significantly improves Monitoring (Qwen3-4B names the
+failing test 73% → 100%, gpt-oss-20b follows the report format 59% → 95%), and both
+fine-tuned students lead their base models on builds fixed (94% and 88% vs. 82% and
+76%), though not significantly on 17 cases. See `backend/training/README.md`.

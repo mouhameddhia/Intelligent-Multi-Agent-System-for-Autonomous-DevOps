@@ -10,9 +10,12 @@ Agents exported: monitoring and remediation (single-call agents). Remediation
 is only kept when Diagnosis was also right, since its input is the diagnosis.
 
 The validation split holds out whole functions (file::function), so the
-evaluation measures generalisation to unseen code, not memorisation.
+evaluation measures generalisation to unseen code, not memorisation. Runs given
+with --train-only (e.g. the easier mutants once the shop bugs exist) go to the
+training split whole, so the validation set only holds the bugs under test.
 
     docker compose exec backend python -m training.export_sft --include-mongo
+    docker compose exec backend python -m training.export_sft --runs data/teacher_runs_shop.jsonl --train-only data/teacher_runs.jsonl
 """
 import argparse
 import hashlib
@@ -56,6 +59,7 @@ def teacher_examples(path: Path) -> tuple[list[dict], Counter]:
             mutant = run["mutant"]
             meta = {
                 "source": "synthetic",
+                "project": mutant.get("project", "sample_project"),
                 "group": f"{mutant['file']}::{mutant['function']}",
                 "file": mutant["file"],
                 "function": mutant["function"],
@@ -89,13 +93,21 @@ def _in_validation(group: str, percent: int) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--runs", type=Path, default=DATA_DIR / "teacher_runs.jsonl")
+    parser.add_argument("--runs", type=Path, nargs="+", default=[DATA_DIR / "teacher_runs.jsonl"])
+    parser.add_argument("--train-only", type=Path, nargs="*", default=[], help="runs never used for validation")
     parser.add_argument("--out-dir", type=Path, default=DATA_DIR / "sft")
     parser.add_argument("--val-percent", type=int, default=20)
     parser.add_argument("--include-mongo", action="store_true")
     args = parser.parse_args()
 
-    examples, stats = teacher_examples(args.runs) if args.runs.exists() else ([], Counter())
+    examples, stats = [], Counter()
+    for path in [*args.runs, *args.train_only]:
+        rows, counts = teacher_examples(path)
+        if path in args.train_only:
+            for row in rows:
+                row["meta"]["train_only"] = True
+        examples += rows
+        stats += counts
     if stats["runs"]:
         print(f"Teacher accuracy over {stats['runs']} runs: " + ", ".join(
             f"{key} {stats[key] / stats['runs']:.0%}" for key in ("monitoring_ok", "diagnosis_ok", "remediation_ok")
@@ -108,7 +120,8 @@ def main() -> None:
     train, val = [], []
     for example in examples:
         meta = example["meta"]
-        holdout = meta["source"] == "synthetic" and _in_validation(meta["group"], args.val_percent)
+        holdout = (meta["source"] == "synthetic" and not meta.get("train_only")
+                   and _in_validation(meta["group"], args.val_percent))
         (val if holdout else train).append(example)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)

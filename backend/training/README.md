@@ -13,11 +13,12 @@ stay on the large model.
 
 ```
 sample_project/  ──mutations.py──►  failing builds with a known root cause
+sample_shop/     ──bugs.py──────►   (single-token mutants; hand-written bugs)
         │
 generate_dataset.py   teacher = the real Monitoring → Diagnosis → Remediation nodes
         │             labels every output against the known file and function
         ▼
-data/teacher_runs.jsonl ──export_sft.py──► data/sft/train.jsonl, val.jsonl
+data/teacher_runs*.jsonl ──export_sft.py──► data/sft/train.jsonl, val.jsonl
         │                                      (+ real incidents the engineer confirmed fixed)
         ▼
 kaggle/qlora_distillation.ipynb  QLoRA on a free Kaggle T4, evaluation vs. the base model,
@@ -27,11 +28,20 @@ kaggle/qlora_distillation.ipynb  QLoRA on a free Kaggle T4, evaluation vs. the b
 ## 1. Generate teacher data (local, Docker)
 
 ```powershell
-docker compose exec backend python -m training.generate_dataset --limit 30
+docker compose exec backend python -m training.generate_dataset --limit 30                # sample_project mutants
+docker compose exec backend python -m training.generate_dataset --suite shop --limit 100  # sample_shop bugs
 ```
 
-- The sample project has 103 single-token mutants; the tests catch 92 of them.
-  Each caught mutant becomes one failing build investigated by the teacher.
+Two bug sets, each failing build investigated by the teacher:
+
+| Suite | Project | Bugs | Output |
+|---|---|---|---|
+| `mutants` | `sample_project/`: 5 independent utility modules, 34 tests | 103 single-token mutants (`mutations.py`), 92 caught by the tests | `data/teacher_runs.jsonl` |
+| `shop` | `sample_shop/`: a 10-module webshop backend (money, dates, catalog, cart, discounts, tax, shipping, loyalty, orders, invoices), 65 tests | 83 hand-written bugs (`bugs.py`): wrong rules, boundaries, swallowed errors, wrong configuration, multi-line edits. 33 of them fail a test in another module (e.g. a `tax.py` bug caught by `test_orders.py`) | `data/teacher_runs_shop.jsonl` |
+
+- The single-token mutants turned out too easy to separate the models (section 5),
+  hence the shop. Each shop bug stays within one file, since the Fix agent rewrites
+  one file.
 - Groq's free tier allows 8,000 tokens per minute and one teacher run uses about
   10–15k tokens, so the script pauses between runs and waits out rate limits.
   If the daily limit is reached it stops; run the same command again later and it
@@ -42,7 +52,7 @@ docker compose exec backend python -m training.generate_dataset --limit 30
 ## 2. Export the training files
 
 ```powershell
-docker compose exec backend python -m training.export_sft --include-mongo
+docker compose exec backend python -m training.export_sft --runs training/data/teacher_runs_shop.jsonl --train-only training/data/teacher_runs.jsonl
 ```
 
 Prints the teacher's accuracy per agent, then writes `data/sft/train.jsonl` and
@@ -54,7 +64,10 @@ Prints the teacher's accuracy per agent, then writes `data/sft/train.jsonl` and
 | Remediation | Diagnosis named the right file and function, and the plan has ≥ 2 steps naming the function |
 
 The validation split holds out whole functions (about 20%), so evaluation measures
-generalisation to unseen code. With `--include-mongo`, real incidents whose feedback
+generalisation to unseen code. Runs passed with `--train-only` (here the easy
+mutants) go to training whole, so the validation set only holds shop bugs: 291
+training and 39 validation examples (22 Monitoring, 17 Remediation, from 10 unseen
+functions). With `--include-mongo`, real incidents whose feedback
 says the build passed are added to the training split; investigations store their
 exact prompts and outputs in `llm_calls` for this purpose.
 
@@ -68,7 +81,8 @@ docker compose run --rm --no-deps -T backend sh -c "pip install -q kaggle && pyt
 ```
 
 `train` pushes a private GPU notebook, waits for it, and downloads the results to
-`data/kaggle/<model>/`. Or by hand:
+`data/kaggle/<model>/`. The run continues on Kaggle if the PC is shut down;
+`kaggle_runner download --model <model>` fetches the results later. Or by hand:
 
 1. Create a Kaggle dataset named `pipeguard-sft` and upload `train.jsonl` and `val.jsonl`.
 2. Import `kaggle/qlora_distillation.ipynb` as a notebook, attach the dataset, set the
@@ -97,12 +111,13 @@ The notebook's checks (sections present, names the function) only test the shape
 an answer. This benchmark tests the outcome: for each held-out Remediation example the
 notebook evaluated, it hands that model's answer and the teacher's Diagnosis to the
 production Fix agent prompt (`build_fix_prompt` in `agents/fix.py`, run by
-gpt-oss-120b), writes the rewritten file into the mutated project and runs all 34
-tests. Answer sources: each student fine-tuned and base, the teacher, and a control
-with no Remediation report. One run is 60 Fix calls, about 130k Groq tokens; it
-resumes after a rate limit. Results go to `data/fix_eval.jsonl`.
+gpt-oss-120b), writes the rewritten file into the buggy project and runs its whole
+test suite. Answer sources: each student fine-tuned and base, the teacher, and a
+control with no Remediation report. On the shop's 17 held-out Remediation examples
+one run is 102 Fix calls, about 280k Groq tokens; it resumes after a rate limit.
+Results go to `data/fix_eval.jsonl` (`--out` to choose another file).
 
-## 5. Results (10 held-out bugs per agent)
+## 5. Results, sample_project (10 held-out mutants per agent)
 
 **Notebook checks** (`format_ok` / mean generated tokens; `grounded` was 100% for all):
 
@@ -140,15 +155,67 @@ What the numbers say:
   undo and every build passes.
 
 To make fine-tuning measurable, the benchmark needs harder failures: multi-line and
-multi-file bugs, and a second, larger sample project.
+multi-file bugs, and a second, larger sample project. Section 6 does this.
+
+## 6. Results, sample_shop (39 held-out examples from 10 unseen functions)
+
+**Teacher on the 83 shop bugs:** Monitoring 98%, Diagnosis 87%, Remediation 95%
+correct, all three 83% (on the mutants Diagnosis was almost always right). Most
+Diagnosis misses are bugs caught by a test in another module. Only the runs right
+on all three are kept for training.
+
+**Notebook checks**, base → fine-tuned, paired McNemar exact test:
+
+| Student | Agent | `format_ok` | `grounded` | Mean tokens |
+|---|---|---|---|---|
+| Qwen3-4B | Monitoring (22) | 100% → 100% | 73% → **100%** (p = 0.03) | 738 → 1,346 |
+| Qwen3-4B | Remediation (17) | 94% → 94% | 94% → 100% (p = 1.0) | 992 → 801 |
+| gpt-oss-20b | Monitoring (22) | 59% → **95%** (p = 0.02) | 86% → 95% (p = 0.5) | 1,893 → 1,397 |
+| gpt-oss-20b | Remediation (17) | 94% → 88% (p = 1.0) | 94% → 88% (p = 1.0) | 755 → 863 |
+| Teacher, gpt-oss-120b | Monitoring / Remediation | 100% / 94% | 100% / 100% | ~1,280 / ~850 |
+
+Training (291 examples, 72 steps on one T4): Qwen3-4B 46 min, 4.9 GB peak, loss
+1.22 → 0.31; gpt-oss-20b 102 min, 9.0 GB peak, loss 4.16 → 3.87. gpt-oss-20b's
+reported loss barely moves in either run, although its behaviour does change; the
+cause is not established (Unsloth's gpt-oss path may report it on another scale), and
+a validation-loss run would settle it.
+
+**Fix success** on the 17 held-out Remediation examples (production prompt):
+
+| Remediation from | Build passes | Restored the original exactly | Extra lines, mean |
+|---|---|---|---|
+| gpt-oss-20b fine-tuned | **16/17 (94%)** | 47% | 2.4 |
+| Qwen3-4B fine-tuned | **15/17 (88%)** | 47% | 2.8 |
+| Teacher, gpt-oss-120b | 15/17 (88%) | 53% | 2.1 |
+| gpt-oss-20b base | 14/17 (82%) | 59% | 4.4 |
+| No Remediation report | 14/17 (82%) | 53% | 2.4 |
+| Qwen3-4B base | 13/17 (76%) | 47% | 6.7 |
+
+What the numbers say:
+
+- **On harder bugs, fine-tuning gives significant gains on Monitoring**: Qwen3-4B
+  learns to name the failing test (73% → 100%), gpt-oss-20b the report format
+  (59% → 95%). Both reach the teacher on these checks.
+- **Remediation does not improve measurably.** The base models already score 94%.
+- **The end result leans towards fine-tuning but is not proven.** Each fine-tuned
+  student fixes 2 more bugs than its base model and loses none (p = 0.5 at n = 17).
+  The control still fixes 82%: the Fix agent works mostly from the Diagnosis and the
+  test file. One bug (`bulk-any-sku`) fails for every source, because the Fix model
+  writes the wrong comparison.
+- **Fix agent robustness.** At `max_tokens=1200`, 6 of 102 Fix answers were empty:
+  gpt-oss-120b's hidden reasoning counts against the budget. `agents/fix.py` now
+  allows 4,000 tokens and retries once on an empty answer, and never judges or
+  pushes an empty file. The table above is after that change.
 
 ## Limits
 
-- **Data volume.** 92 mutants give at most ~180 examples, enough to measure the
-  approach but small for SFT. Add modules to `sample_project/` (with tests), or let real
-  incidents accumulate, to grow it.
-- **Failure types.** Mutants cover logic bugs caught by unit tests only, not dependency,
-  infrastructure or flaky-test failures.
+- **Data volume.** 175 teacher runs give 330 examples, small for SFT, and the test
+  set (39 examples, 17 for the Fix benchmark) only shows large effects as
+  significant. One training run per student, one seed.
+- **Synthetic bugs.** Both projects and all bugs are written for this purpose. A
+  real-bug test set (e.g. BugsInPy) would show whether the gains hold on real code.
+- **Failure types.** The bugs are logic bugs caught by unit tests only, not
+  dependency, infrastructure or flaky-test failures.
 - **Serving.** gpt-oss-20b and Qwen3-14B need 9–14 GB even in 4-bit, so they cannot run
   on a 4 GB laptop GPU: they are evaluated on Kaggle as the upper bound of what
   distillation achieves. Qwen3-4B is the student meant for local use.

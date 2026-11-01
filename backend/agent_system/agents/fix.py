@@ -303,6 +303,18 @@ def clean_fix_output(text: str) -> str:
     return new_content
 
 
+def generate_fix(invoke, prompt: str, attempts: int = 2):
+    """Ask for the rewritten file, retrying on an empty answer: the model can
+    spend its whole token budget on hidden reasoning and return nothing.
+    Returns (content, last LLM result); content is "" if every attempt was empty."""
+    for _attempt in range(attempts):
+        result = invoke(prompt)
+        content = clean_fix_output(result.content)
+        if content.strip():
+            break
+    return content, result
+
+
 def run_apply_fix(state: InvestigationState) -> InvestigationState:
     token = state.get("github_token") or ""
     owner = state.get("github_owner") or ""
@@ -357,7 +369,9 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
         model=settings.llm_model,
         api_key=settings.groq_api_key,
         temperature=0,
-        max_tokens=1200,
+        # Hidden reasoning counts against this budget: at 1200 the model
+        # sometimes spent it all thinking and returned an empty file.
+        max_tokens=4000,
         model_kwargs={"include_reasoning": False},
     )
 
@@ -367,12 +381,16 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
     )
 
     try:
-        result = _invoke_with_retry(llm, fix_prompt)
-        new_content = clean_fix_output(result.content)
+        new_content, _result = generate_fix(lambda prompt: _invoke_with_retry(llm, prompt), fix_prompt)
     except Exception as exc:
         return {**state, "fix_result": {
             "applied": False,
             "message": f"LLM failed to generate a fix: {exc}",
+        }}
+    if not new_content.strip():
+        return {**state, "fix_result": {
+            "applied": False,
+            "message": "The fix model returned an empty file twice; nothing was pushed.",
         }}
 
     # Independent judge gate: a different model (Gemini) reviews the diff
