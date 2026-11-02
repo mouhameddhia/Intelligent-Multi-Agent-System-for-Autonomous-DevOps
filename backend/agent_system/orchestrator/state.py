@@ -48,6 +48,20 @@ class InvestigationState(TypedDict, total=False):
     # server-side via historical_match.resolve_historical_match(). None if no
     # genuine match. Remediation reads this; it makes no DB/tool call of its own.
     historical_incident: dict[str, Any] | None
+    
+    # Set by Remediation only when learned guidance was injected into its
+    # prompt: the policy version that supplied it. Absent otherwise.
+    policy_version_used: int
+
+    # Independent audit of Monitoring/Diagnosis/Remediation against the
+    # evidence, produced by a different model family (Qwen vs. the
+    # pipeline's GPT-OSS). Purely informative — never gates approval. Every
+    # field is None/empty-safe if the judge call fails for any reason.
+    judge_verdict: str
+    judge_scores: dict[str, int | None]
+    judge_historical_match_quality: int | None
+    judge_hallucination_detected: bool | None
+    judge_issues: list[str]
 
     # Set by the human_approval node once the devops engineer responds.
     approval_status: str

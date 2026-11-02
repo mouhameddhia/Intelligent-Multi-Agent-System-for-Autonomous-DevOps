@@ -109,17 +109,28 @@ def compute_overall_confidence(values: Iterable[Any]) -> int | None:
     valid = [v for v in values if _valid(v)]
     return round(sum(valid) / len(valid)) if valid else None
 
+def judge_overall_score(judge_scores: dict[str, int | None]) -> int | None:
+    """Mean of the judge's three per-agent scores — the judge's own rating,
+    shown on its own (e.g. a judge card) and also folded into the pipeline's
+    overall confidence via summarize_confidence()."""
+    return compute_overall_confidence((judge_scores or {}).values())
 
 def summarize_confidence(state: dict[str, Any]) -> tuple[dict[str, int | None], int | None]:
-    """(per-agent scores, overall) from a final graph state."""
+    """(per-agent self-reported scores, overall) from a final graph state.
+    Overall is the mean of each agent's own confidence plus the judge's
+    aggregate score (itself the mean of the judge's 3 per-agent ratings) —
+    4 numbers averaged together when the judge ran successfully, 3 when it
+    didn't (judge_overall_score returns None and compute_overall_confidence
+    already filters None out)."""
     scores = {
         "monitoring": state.get("monitoring_confidence"),
         "diagnosis": state.get("diagnosis_confidence"),
         "remediation": state.get("remediation_confidence"),
     }
     scores = {k: (int(round(v)) if _valid(v) else None) for k, v in scores.items()}
-    return scores, compute_overall_confidence(scores.values())
-
+    judge_score = judge_overall_score(state.get("judge_scores") or {})
+    overall = compute_overall_confidence([*scores.values(), judge_score])
+    return scores, overall
 
 # ---------------------------------------------------------------------------
 # Deterministic Monitoring fallback

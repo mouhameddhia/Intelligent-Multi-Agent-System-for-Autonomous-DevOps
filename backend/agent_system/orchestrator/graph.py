@@ -11,6 +11,7 @@ from ..agents.monitoring import run_monitoring
 from ..agents.diagnosis import run_diagnosis
 from ..agents.remediation import run_remediation
 from ..agents.steps import run_structure_steps
+from ..agents.judge import run_llm_judge
 from ..agents.fix import run_apply_fix
 
 
@@ -22,6 +23,11 @@ def run_human_approval(state: InvestigationState) -> InvestigationState:
         "build_number": state["build_number"],
         "remediation_report": state["remediation_report"],
         "steps": state.get("steps", []),
+        # Informational only — the engineer can read this before deciding,
+        # it never affects routing or the approval outcome itself.
+        "judge_verdict": state.get("judge_verdict", ""),
+        "judge_scores": state.get("judge_scores", {}),
+        "judge_hallucination_detected": state.get("judge_hallucination_detected"),
     })
     decision = (decision_payload or {}).get("decision", "deny")
     return {**state, "approval_status": decision}
@@ -39,6 +45,7 @@ def build_investigation_graph():
     graph.add_node("diagnosis", run_diagnosis)
     graph.add_node("remediation", run_remediation)
     graph.add_node("structure_steps", run_structure_steps)
+    graph.add_node("llm_judge", run_llm_judge)
     graph.add_node("human_approval", run_human_approval)
     graph.add_node("apply_fix", run_apply_fix)
 
@@ -46,7 +53,8 @@ def build_investigation_graph():
     graph.add_edge("monitoring", "diagnosis")
     graph.add_edge("diagnosis", "remediation")
     graph.add_edge("remediation", "structure_steps")
-    graph.add_edge("structure_steps", "human_approval")
+    graph.add_edge("structure_steps", "llm_judge")
+    graph.add_edge("llm_judge", "human_approval")
     graph.add_conditional_edges(
         "human_approval",
         _route_after_approval,
