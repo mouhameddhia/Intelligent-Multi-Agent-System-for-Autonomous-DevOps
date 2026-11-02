@@ -13,7 +13,8 @@ stay on the large model.
 
 ```
 sample_project/  ──mutations.py──►  failing builds with a known root cause
-sample_shop/     ──bugs.py──────►   (single-token mutants; hand-written bugs)
+sample_shop/     ──bugs.py──────►   (single-token mutants; hand-written bugs;
+RunBugRun        ──runbugrun.py─►    real contest bugs, evaluation only)
         │
 generate_dataset.py   teacher = the real Monitoring → Diagnosis → Remediation nodes
         │             labels every output against the known file and function
@@ -30,14 +31,18 @@ kaggle/qlora_distillation.ipynb  QLoRA on a free Kaggle T4, evaluation vs. the b
 ```powershell
 docker compose exec backend python -m training.generate_dataset --limit 30                # sample_project mutants
 docker compose exec backend python -m training.generate_dataset --suite shop --limit 100  # sample_shop bugs
+docker compose exec backend python -m training.runbugrun --count 40                        # real bugs, see below
+docker compose exec backend python -m training.generate_dataset --suite runbugrun --limit 40
 ```
 
-Two bug sets, each failing build investigated by the teacher:
+Three bug sets, each failing build investigated by the teacher. The first two are
+for training and evaluation, the third for evaluation only:
 
 | Suite | Project | Bugs | Output |
 |---|---|---|---|
 | `mutants` | `sample_project/`: 5 independent utility modules, 34 tests | 103 single-token mutants (`mutations.py`), 92 caught by the tests | `data/teacher_runs.jsonl` |
 | `shop` | `sample_shop/`: a 10-module webshop backend (money, dates, catalog, cart, discounts, tax, shipping, loyalty, orders, invoices), 65 tests | 83 hand-written bugs (`bugs.py`): wrong rules, boundaries, swallowed errors, wrong configuration, multi-line edits. 33 of them fail a test in another module (e.g. a `tax.py` bug caught by `test_orders.py`) | `data/teacher_runs_shop.jsonl` |
+| `runbugrun` | `data/runbugrun/<problem>-<id>/`: one small project per bug, `main.py` plus a pytest file that runs it on the contest judge's inputs | 40 real bugs from RunBugRun (Prenner and Robbes, 2023): a buggy and a fixed Python submission that people made to the same contest problem (Project CodeNet), one bug per problem | `data/teacher_runs_runbugrun.jsonl` |
 
 - The single-token mutants turned out too easy to separate the models (section 5),
   hence the shop. Each shop bug stays within one file, since the Fix agent rewrites
@@ -46,6 +51,14 @@ Two bug sets, each failing build investigated by the teacher:
   10–15k tokens, so the script pauses between runs and waits out rate limits.
   If the daily limit is reached it stops; run the same command again later and it
   resumes where it left off.
+- `runbugrun.py` reads the Python test split and the tests of the
+  [RunBugRun data release](https://github.com/giganticode/run_bug_run_data/releases)
+  (v0.0.1, downloaded into `data/runbugrun_raw/`). It keeps submissions of 5–60
+  lines, standard library only, whose fix changes at most two places, with 3–6
+  judge tests with exact (not float) outputs. A bug is kept only if, on this
+  Python, the fixed version passes every test and the buggy one fails one. The
+  programs run with an empty environment except `PATH`, so they cannot read the
+  API keys.
 - The generator turns on `llm_include_reasoning`, so each recorded call also keeps
   the teacher's reasoning text (production leaves it off).
 
@@ -116,6 +129,27 @@ test suite. Answer sources: each student fine-tuned and base, the teacher, and a
 control with no Remediation report. On the shop's 17 held-out Remediation examples
 one run is 102 Fix calls, about 280k Groq tokens; it resumes after a rate limit.
 Results go to `data/fix_eval.jsonl` (`--out` to choose another file).
+
+The notebook only evaluates the held-out split of the training projects. For the
+real bugs, `eval_local.py` runs both Qwen3-4B students in Ollama on the teacher's
+exact Monitoring and Remediation prompts, with the notebook's checks and the
+production confidence parser, and `eval_fix.py --local` takes their answers from
+there (the base student is set up in section 8):
+
+```powershell
+docker compose exec backend python -m training.eval_local       # 160 local answers, ~2 h on a GTX 1650
+docker compose exec backend python -m training.eval_fix --runs training/data/teacher_runs_runbugrun.jsonl --local training/data/eval_local_runbugrun.jsonl --out training/data/fix_eval_runbugrun.jsonl
+```
+
+`compare.py` compares each source with the teacher on the same cases: both rates,
+the difference with a 95% interval (Newcombe's method for paired proportions),
+McNemar's exact test, and non-inferiority, i.e. whether the whole interval lies
+above `--margin` (10 points by default):
+
+```powershell
+docker compose exec backend python -m training.compare training/data/fix_eval_shop.jsonl training/data/fix_eval_runbugrun.jsonl --metric fix_ok
+docker compose exec backend python -m training.compare training/data/eval_local_runbugrun.jsonl --agent monitoring --metric grounded
+```
 
 ## 5. Results, sample_project (10 held-out mutants per agent)
 
@@ -214,12 +248,75 @@ What the numbers say:
     `test_<target file>`, and resolves the full path: right on 175 of 175. The
     benchmark uses the same choice; it changed the test file for 4 of the 17 bugs.
 
-## 7. Run the local student in PipeGuard
+## 7. Results, real bugs (40 RunBugRun bugs, none seen in training)
+
+**Teacher:** Monitoring 95%, Diagnosis 100%, Remediation 98% correct. Only the
+Qwen3-4B students were run, since gpt-oss-20b does not fit a local GPU.
+
+**Report checks** (out of 40; the teacher's answers are scored the same way):
+
+| | Monitoring format | Monitoring names the failing test | Remediation format | Remediation names the function | Mean tokens, Mon. / Rem. |
+|---|---|---|---|---|---|
+| Teacher, gpt-oss-120b | 40 | 40 | 40 | 39 | 1,466 / 779 |
+| Qwen3-4B fine-tuned | 40 | **40** | 39 | 40 | 1,314 / 710 |
+| Qwen3-4B base | 40 | 18 | 40 | 38 | 569 / 1,074 |
+
+**Fix success** (production prompt, the Fix agent on gpt-oss-120b):
+
+| Remediation from | Build passes | Restored the original exactly |
+|---|---|---|
+| Qwen3-4B fine-tuned | **40/40 (100%)** | 38% |
+| Teacher, gpt-oss-120b | 38/40 (95%) | 35% |
+| Qwen3-4B base | 38/40 (95%) | 30% |
+| No Remediation report | 36/40 (90%) | 30% |
+
+Contest fixes often pass the tests without undoing the exact edit, hence the low
+"restored exactly" for every source.
+
+**Against the teacher**, 95% intervals for the difference, non-inferior if the
+whole interval lies above −10 points. Fix success pools the shop and the real bugs
+(57 cases):
+
+| Measure | Qwen3-4B fine-tuned | Qwen3-4B base | No report |
+|---|---|---|---|
+| Build passes, 57 cases (teacher 93%) | 96%, +3.5 [−2.8, +11.6], **non-inferior** | 91%, −1.8 [−9.9, +5.8], non-inferior | 88%, −5.3 [−14.7, +3.1], not shown |
+| Restored exactly, 57 cases (teacher 40%) | 40%, +0.0 [−8.2, +8.2], **non-inferior** | 37%, −3.5 [−8.4, +1.3], non-inferior | 37%, −3.5 [−12.9, +6.0], not shown |
+| Monitoring names the failing test, 40 (teacher 100%) | 100%, +0 [−8.8, +8.8], **non-inferior** | 45%, −55 [−69.3, −37.5], p < 0.001 | |
+| Remediation format, 40 (teacher 100%) | 98%, −2.5 [−12.9, +6.5], not shown | 100%, +0 [−8.8, +8.8] | |
+
+What the numbers say:
+
+- **The Monitoring gain holds on real code.** Fine-tuned Qwen3-4B names the failing
+  test in 40 of 40 reports, the base model in 18 (+55 points, 22 to 0, p < 0.001).
+- **Fine-tuned Qwen3-4B is non-inferior to the teacher** on builds fixed, exact
+  restores and Monitoring grounding, within the 10-point margin. On Remediation
+  format it misses one answer of 40, so non-inferiority is not shown there (the
+  interval reaches −12.9).
+- **What this does not show:** that it is *better* than the teacher (2 builds to 0,
+  p = 0.5), or that it holds for large codebases: these are short single-file
+  contest programs.
+- **Monitoring's budget**, a production change found here: 5 of 120 Monitoring
+  answers (2 teacher, 3 fine-tuned) hit the 2,500-token limit on long pytest logs
+  and lost their confidence line. Monitoring now allows 4,000 tokens, locally and
+  on Groq, and all 120 complete. Redone answers came out close to, but not exactly,
+  the first ones: generation at temperature 0 is not fully deterministic, on Groq or
+  in Ollama.
+- **The notebook's confidence check is stricter than production's.** It misses
+  `**AGENT_CONFIDENCE:** 92`, which the production parser accepts; `eval_local.py`
+  uses the production parser. Rescored that way, the section 6 results change by
+  one answer at most (gpt-oss-20b Remediation format, base and fine-tuned).
+
+## 8. Run the local student in PipeGuard
 
 ```powershell
 cd backend/training/data/kaggle/qwen3-4b/pipeguard-qwen3-4b-gguf_gguf
 ollama create pipeguard-qwen3-4b -f Modelfile
 ```
+
+For the base model in `eval_local.py`, copy that Modelfile into a new folder, set
+its first line to `FROM hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M` and run
+`ollama create pipeguard-qwen3-4b-base -f Modelfile`: the same quantisation,
+template and settings as the fine-tuned model.
 
 Then add `LOCAL_LLM_MODEL=pipeguard-qwen3-4b` to `.env` and recreate the backend
 (`docker compose up -d --force-recreate --no-deps backend`). The single-call
@@ -231,7 +328,7 @@ the answer into the logged `reasoning`, so the reports parse as before.
 | Setting | Default | |
 |---|---|---|
 | `LOCAL_LLM_URL` | `http://host.docker.internal:11434` | Ollama on the host, seen from the container |
-| `LOCAL_LLM_NUM_CTX` | 8192 | prompts are ~2–3k tokens plus up to 2,500 generated |
+| `LOCAL_LLM_NUM_CTX` | 8192 | prompts are ~2–3k tokens plus up to 4,000 generated (Monitoring) |
 | `LOCAL_LLM_NUM_GPU` | 99 (all layers) | Ollama's estimate left 34–45% of the model on the CPU |
 
 Measured on a GTX 1650 (4 GB) with a held-out shop bug: everything on the GPU
@@ -241,15 +338,21 @@ against a few seconds on Groq; both named the right failing test and function.
 
 ## Limits
 
-- **Data volume.** 175 teacher runs give 330 examples, small for SFT, and the test
-  set (39 examples, 17 for the Fix benchmark) only shows large effects as
-  significant. One training run per student, one seed.
-- **Synthetic bugs.** Both projects and all bugs are written for this purpose. A
-  real-bug test set (e.g. BugsInPy) would show whether the gains hold on real code.
+- **Data volume.** 175 teacher runs give 330 examples, small for SFT. The test sets
+  (39 shop examples, 40 real bugs) rule out differences larger than about 10 points,
+  not smaller ones. One training run per student, one seed.
+- **Real bugs, but small programs.** The training bugs are written for this
+  purpose. The 40 RunBugRun bugs are real, but short single-file contest
+  programs; a test set from real projects (e.g. BugsInPy) would show whether the
+  results hold on larger codebases.
 - **Failure types.** The bugs are logic bugs caught by unit tests only, not
   dependency, infrastructure or flaky-test failures.
 - **Serving.** gpt-oss-20b and Qwen3-14B need 9–14 GB even in 4-bit, so they cannot run
   on a 4 GB laptop GPU: they are evaluated on Kaggle as the upper bound of what
   distillation achieves. Qwen3-4B is the student meant for local use.
 - **Local latency.** Reasoning adds hundreds of generated tokens per answer: on a
-  GTX 1650 the local student takes 30–70 s per call instead of a few seconds (section 7).
+  GTX 1650 the local student takes 30–70 s per call instead of a few seconds
+  (section 8; medians of 55 s for Monitoring and 37 s for Remediation on the real
+  bugs).
+- **Nondeterminism.** Repeating a run at temperature 0 can change an answer
+  slightly, so a single run is one sample of each model.

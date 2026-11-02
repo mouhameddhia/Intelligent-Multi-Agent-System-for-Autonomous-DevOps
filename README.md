@@ -75,7 +75,7 @@ incident in MongoDB as `llm_calls`, which is the training data for fine-tuning.
 `backend/training/` distils the production model's reasoning and answers
 (gpt-oss-120b) into LoRA adapters for Monitoring and Remediation, on Qwen3-4B
 (runs locally in Ollama) and gpt-oss-20b (strongest that trains on a free Kaggle
-T4): a data generator over two sample projects with automatic labels, an exporter,
+T4): a data generator over two sample projects and a set of real bugs, with automatic labels, an exporter,
 and one Kaggle notebook that trains, evaluates and exports either student. A
 fix-success benchmark (`training/eval_fix.py`) applies each model's proposal through
 the production Fix agent and reruns the tests. Results: on single-token mutants
@@ -83,6 +83,14 @@ fine-tuning shows no gain, since every model finds them. On harder, cross-module
 bugs in a webshop project, it significantly improves Monitoring (Qwen3-4B names the
 failing test 73% → 100%, gpt-oss-20b follows the report format 59% → 95%), while
 builds fixed barely move (94% and 88% vs. 88% and 82% for the base models, not
-significant on 17 cases). Setting `LOCAL_LLM_MODEL` in `.env`
+significant on 17 cases). On 40 real bugs from RunBugRun (contest submissions,
+none seen in training), fine-tuned Qwen3-4B names the failing test in 40 of 40
+Monitoring reports against 18 for the base model (p < 0.001), and is
+non-inferior to gpt-oss-120b within 10 points on builds fixed (96% vs. 93%,
+pooled with the shop, 57 cases) and on Monitoring grounding (`training/compare.py`).
+Setting `LOCAL_LLM_MODEL` in `.env`
 runs Monitoring and Remediation on the fine-tuned Qwen3-4B in Ollama (30–70 s per
-call on a 4 GB GTX 1650). See `backend/training/README.md`.
+call on a 4 GB GTX 1650); Diagnosis, Fix and the judge stay on the large models.
+Monitoring allows 4,000 generated tokens: at 2,500, long pytest logs cut 5 of 120
+reports on the real bugs off before their confidence line. See
+`backend/training/README.md`.
