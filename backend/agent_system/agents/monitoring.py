@@ -1,16 +1,72 @@
 import json
 import logging
+import time
 
 from langchain_groq import ChatGroq
 from langchain.agents import create_agent
 
-from .evidence_utils import compact_evidence, build_summary_markdown
+from .evidence_utils import build_summary_markdown
 from .confidence import extract_agent_confidence, monitoring_evidence_confidence
 from ..config import settings
+from ..llm_log import append_call, record_call
+from ..local_llm import invoke_with_fallback
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_monitoring_tools
 
 logger = logging.getLogger(__name__)
+
+
+def _monitoring_evidence(evidence: dict) -> dict:
+    """Give Monitoring only the build facts it is responsible for reporting."""
+    jenkins = evidence.get("jenkins") or {}
+    jenkins_summary = {}
+    if isinstance(jenkins, dict):
+        jenkins_summary = {
+            key: jenkins[key]
+            for key in (
+                "job_name", "build_number", "result", "timestamp", "duration_ms",
+                "url", "failed_stage", "console_log",
+            )
+            if jenkins.get(key) is not None
+        }
+        if isinstance(jenkins_summary.get("console_log"), str):
+            jenkins_summary["console_log"] = jenkins_summary["console_log"][-2200:]
+
+    metrics = []
+    for metric in evidence.get("metrics") or []:
+        if not isinstance(metric, dict):
+            continue
+        metrics.append({
+            "query": metric.get("query"),
+            "status": metric.get("status"),
+            "count": metric.get("count"),
+            "message": str(metric.get("message", ""))[:240],
+            "results": [
+                {
+                    "metric": result.get("metric", {}),
+                    "values": (result.get("values") or [])[-3:],
+                }
+                for result in (metric.get("results") or [])[:2]
+                if isinstance(result, dict)
+            ],
+        })
+
+    loki = evidence.get("loki") or {}
+    loki_summary = {
+        "status": loki.get("status"),
+        "message": str(loki.get("message", ""))[:240],
+        "lines": [
+            {
+                "timestamp_ms": item.get("timestamp_ms"),
+                "labels": item.get("labels", {}),
+                "line": str(item.get("line", ""))[-400:],
+            }
+            for item in (loki.get("lines") or [])[-4:]
+            if isinstance(item, dict)
+        ],
+    } if isinstance(loki, dict) else {}
+
+    return {"jenkins": jenkins_summary, "metrics": metrics, "loki": loki_summary}
 
 # The Monitoring report has exactly three sections: Build summary, Failed stage,
 # Exact error. Everything else (provider notes, system health, conclusion) is
@@ -44,6 +100,9 @@ supplied evidence bundle.
 IMPORTANT EVIDENCE RULES:
 - Use only the supplied evidence bundle. Do not call tools and do not invent
   stages, test names, log lines or messages.
+- Report a stage as failed only when the Jenkins output shows a failed command,
+  test, or stage result. A value printed by a successful step is not itself a
+  stage failure.
 - If the console log is unavailable, say so in the relevant section.
 
 OUTPUT FORMAT - exactly these two markdown sections, in this order, nothing else:
@@ -64,6 +123,21 @@ STRICT RULES:
   the console log supports what you reported. Do not claim statistical calibration.
 """
 
+MAX_TOKENS = 4000
+
+
+def build_monitoring_messages(state: InvestigationState) -> list[tuple[str, str]]:
+    """Build the production prompt; shared with the offline training pipeline."""
+    evidence = state.get("evidence") or {}
+    message = (
+        f"Monitor Jenkins job {state['job_name']} build "
+        f"#{state['build_number']}. The following evidence was collected "
+        f"from configured providers for this investigation. Treat provider "
+        f"statuses as authoritative and do not fill gaps with guesses:\n\n"
+        f"{json.dumps(_monitoring_evidence(evidence), separators=(',', ':'), default=str)}"
+    )
+    return [("system", GROUNDED_PROMPT), ("human", message)]
+
 
 def run_monitoring(state: InvestigationState) -> InvestigationState:
     llm = ChatGroq(
@@ -73,25 +147,19 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
         timeout=45,
         # Reasoning tokens count against this budget on gpt-oss models, so keep
         # generous headroom: a truncated answer loses the confidence line.
-        max_tokens=2500,
-        model_kwargs={"include_reasoning": False},
+        max_tokens=MAX_TOKENS,
+        model_kwargs={"include_reasoning": settings.llm_include_reasoning},
     )
 
     evidence = state.get("evidence") or {}
 
     if evidence:
-        message = (
-            f"Monitor Jenkins job {state['job_name']} build "
-            f"#{state['build_number']}. The following evidence was collected "
-            f"from configured providers for this investigation. Treat provider "
-            f"statuses as authoritative and do not fill gaps with guesses:\n\n"
-            f"{json.dumps(compact_evidence(evidence), separators=(',', ':'), default=str)}"
+        messages = build_monitoring_messages(state)
+        started = time.perf_counter()
+        use_local_llm = bool(state.get("use_local_llm", False))
+        result = invoke_with_fallback(
+            llm, messages, max_tokens=MAX_TOKENS, use_local_llm=use_local_llm
         )
-
-        result = llm.invoke([
-            ("system", GROUNDED_PROMPT),
-            ("human", message),
-        ])
 
         raw = result.content
         if not isinstance(raw, str):
@@ -119,6 +187,9 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
             "monitoring_report": report,
             "monitoring_confidence": confidence,
             "monitoring_confidence_source": source,
+            "llm_calls": append_call(
+                state, record_call("monitoring", messages, result, started)
+            ),
         }
 
     # Compatibility path for the teammate's original standalone demo.

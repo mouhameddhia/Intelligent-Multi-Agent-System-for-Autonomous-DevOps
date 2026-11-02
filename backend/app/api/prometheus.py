@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.connectors.prometheus import (
@@ -6,7 +6,9 @@ from app.connectors.prometheus import (
     PrometheusConnector,
 )
 
-router = APIRouter(prefix="/api/prometheus", tags=["Prometheus"])
+from app.api.auth import require_user
+
+router = APIRouter(prefix="/api/prometheus", tags=["Prometheus"], dependencies=[Depends(require_user)])
 
 
 class PrometheusConfiguration(BaseModel):

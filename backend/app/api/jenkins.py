@@ -1,5 +1,5 @@
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from app.connectors.jenkins import (
@@ -7,7 +7,9 @@ from app.connectors.jenkins import (
     JenkinsConnector,
 )
 
-router = APIRouter(prefix="/api/jenkins", tags=["Jenkins"])
+from app.api.auth import require_user
+
+router = APIRouter(prefix="/api/jenkins", tags=["Jenkins"], dependencies=[Depends(require_user)])
 
 
 class JenkinsCredentials(BaseModel):

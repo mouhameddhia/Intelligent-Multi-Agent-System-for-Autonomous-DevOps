@@ -1,11 +1,54 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { extractSection } from './reportSections'
+import IncidentsDashboard from './components/IncidentsDashboard'
+import PersonalizationToggle from './components/PersonalizationToggle'
+import IncidentChatbot from './IncidentChatbot'
 import './App.css'
 
 const API_URL = 'http://127.0.0.1:8000';
 const AGENT_API_URL = API_URL;
+const DEFAULT_GRAFANA_URL = 'http://192.168.56.10:3000'
+const PIPEGUARD_GRAFANA_DASHBOARD_URL = `${DEFAULT_GRAFANA_URL}/d/pipeguard-observability/pipeguard-ci-cd-and-observability?from=now-24h&to=now&timezone=browser&refresh=30s&kiosk`
+
+function isPipeGuardGrafanaDashboardUrl(value, grafanaBaseUrl) {
+  try {
+    const dashboard = new URL(value)
+    const base = new URL(grafanaBaseUrl)
+    const internalDashboard = /^\/d\/pipeguard-observability(?:\/|$)/.test(dashboard.pathname)
+    const externallySharedDashboard = /^\/public-dashboards\/[A-Za-z0-9_-]+\/?$/.test(dashboard.pathname)
+    return dashboard.origin === base.origin && (internalDashboard || externallySharedDashboard)
+  } catch {
+    return false
+  }
+}
+
+function findMatchingSonarProject(projects, repositoryFullName) {
+  const repository = (repositoryFullName || '').split('/').pop() || ''
+  const normalize = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const normalizedRepository = normalize(repository)
+  if (!normalizedRepository) return null
+  return projects.find((project) =>
+    normalize(project.key) === normalizedRepository || normalize(project.name) === normalizedRepository,
+  ) || null
+}
+
+function authenticatedFetch(input, options = {}) {
+  const accessToken = (() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('pipeguard-auth') || 'null')?.access_token || ''
+    } catch {
+      return ''
+    }
+  })()
+  if (!accessToken) {
+    return Promise.reject(new Error('Your session expired. Sign in again.'))
+  }
+  const headers = new Headers(options.headers || {})
+  headers.set('Authorization', `Bearer ${accessToken}`)
+  return fetch(input, { ...options, headers })
+}
 
 const initialIntegrations = [
   {
@@ -43,12 +86,108 @@ const initialIntegrations = [
       { name: 'url', label: 'Prometheus URL', placeholder: 'http://localhost:9090' },
     ],
   },
+  {
+    id: 'loki',
+    name: 'Loki',
+    description: 'Search service logs around a failing build.',
+    category: 'Observability',
+    icon: 'L',
+    color: 'loki',
+    fields: [
+      { name: 'url', label: 'Loki URL', placeholder: 'http://192.168.56.10:3100' },
+      { name: 'project_name', label: 'PipeGuard project label', placeholder: 'e.g. pipeguard-lab' },
+      { name: 'username', label: 'Username (optional)', placeholder: 'For HTTP basic authentication', required: false },
+      { name: 'token', label: 'Token or password (optional)', placeholder: 'Bearer token, or password with username', secret: true, required: false },
+    ],
+  },
+  {
+    id: 'sonarqube',
+    name: 'SonarQube',
+    description: 'Review code-quality metrics, vulnerabilities, and security hotspots.',
+    category: 'Code quality & security',
+    icon: 'S',
+    color: 'sonarqube',
+    fields: [
+      { name: 'url', label: 'SonarQube URL', placeholder: 'http://192.168.56.10:9000' },
+      { name: 'token', label: 'User token', placeholder: 'Enter SonarQube token', secret: true },
+    ],
+  },
+  {
+    id: 'kubernetes',
+    name: 'Kubernetes',
+    description: 'Connect to a cluster and inspect live namespace workloads, services and warning events.',
+    category: 'Orchestration',
+    icon: 'K',
+    color: 'kubernetes',
+    fields: [
+      { name: 'url', label: 'Kubernetes API URL', placeholder: 'https://127.0.0.1:6443' },
+      { name: 'namespace', label: 'Namespace', placeholder: 'pipeguard-lab' },
+      { name: 'token', label: 'Read-only bearer token', placeholder: 'Paste namespace-scoped token', secret: true },
+      { name: 'ca_certificate', label: 'Cluster CA certificate (PEM)', placeholder: '-----BEGIN CERTIFICATE-----', multiline: true },
+    ],
+  },
+  {
+    id: 'grafana',
+    name: 'Grafana',
+    description: 'Open build-time dashboards for Prometheus metrics and Loki logs.',
+    category: 'Observability',
+    icon: 'G',
+    color: 'grafana',
+    connected: true,
+    fields: [
+      { name: 'url', label: 'Grafana URL', placeholder: 'http://192.168.56.10:3000' },
+      { name: 'dashboard_url', label: 'Grafana dashboard or shared dashboard URL', placeholder: PIPEGUARD_GRAFANA_DASHBOARD_URL },
+    ],
+  },
 ]
 
 const navigation = [
   { id: 'dashboard', icon: '▦', label: 'Dashboard' },
   { id: 'pipelines', icon: '⑂', label: 'Pipelines' },
-  { id: 'incidents', icon: '◈', label: 'Incidents' },
+  { id: 'incidents', icon: '◈', label: 'Investigations' },
+]
+
+const toolCatalog = [
+  {
+    objective: 'CI/CD pipelines',
+    tools: [
+      { id: 'jenkins', name: 'Jenkins', icon: 'J', color: 'jenkins', description: 'Builds, stages, console logs and Trivy reports.', available: true },
+      { name: 'GitLab CI', icon: 'GL', color: 'github', description: 'GitLab runners, pipelines and job traces.', hint: 'Will be integrated soon' },
+      { name: 'CircleCI', icon: 'C', color: 'prometheus', description: 'Pipeline runs, workflows and job output.', hint: 'Will be integrated soon' },
+    ],
+  },
+  {
+    objective: 'Source control',
+    tools: [
+      { id: 'github', name: 'GitHub', icon: '⌘', color: 'github', description: 'Repositories, commits and changed files.', available: true },
+      { name: 'GitLab', icon: 'GL', color: 'sonarqube', description: 'Projects, merge requests and commits.', hint: 'Will be integrated soon' },
+    ],
+  },
+  {
+    objective: 'Observability',
+    tools: [
+      { id: 'prometheus', name: 'Prometheus', icon: 'P', color: 'prometheus', description: 'Target health and metrics queries.', available: true },
+      { id: 'loki', name: 'Loki', icon: 'L', color: 'loki', description: 'Container logs collected through Alloy.', available: true },
+      { id: 'grafana', name: 'Grafana', icon: 'G', color: 'grafana', description: 'Dashboards for metrics and logs.', available: true },
+      { name: 'Datadog', icon: 'D', color: 'prometheus', description: 'Metrics, traces and service monitoring.', hint: 'Will be integrated soon' },
+    ],
+  },
+  {
+    objective: 'Code quality & security',
+    tools: [
+      { id: 'sonarqube', name: 'SonarQube', icon: 'S', color: 'sonarqube', description: 'Quality gates, measures and code issues.', available: true },
+      { name: 'Trivy', icon: 'T', color: 'kubernetes', description: 'Container vulnerability scan in the Jenkins pipeline.', integrated: 'Integrated with Jenkins' },
+      { name: 'Snyk', icon: 'S', color: 'sonarqube', description: 'Open-source and container security scans.', hint: 'Will be integrated soon' },
+    ],
+  },
+  {
+    objective: 'Orchestration & infrastructure',
+    tools: [
+      { id: 'kubernetes', name: 'Kubernetes', icon: 'K', color: 'kubernetes', description: 'Namespace workloads, services and events.', available: true },
+      { name: 'Argo CD', icon: 'A', color: 'prometheus', description: 'GitOps applications and sync status.', hint: 'Will be integrated soon' },
+      { name: 'Terraform', icon: 'T', color: 'sonarqube', description: 'Infrastructure plans and state changes.', hint: 'Will be integrated soon' },
+    ],
+  },
 ]
 
 function formatDuration(milliseconds) {
@@ -124,7 +263,121 @@ function getUnifiedReportForDisplay(reports) {
 }
 
 function App() {
+  const [auth, setAuth] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem('pipeguard-auth') || 'null')
+    } catch {
+      return null
+    }
+  })
+  const [checkingSession, setCheckingSession] = useState(Boolean(auth?.access_token))
+
+  useEffect(() => {
+    if (!auth?.access_token) return
+    fetch(`${API_URL}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${auth.access_token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Session expired')
+        const user = await response.json()
+        const updated = { ...auth, user }
+        sessionStorage.setItem('pipeguard-auth', JSON.stringify(updated))
+        setAuth(updated)
+      })
+      .catch(() => {
+        sessionStorage.removeItem('pipeguard-auth')
+        setAuth(null)
+      })
+      .finally(() => setCheckingSession(false))
+  // Validate only when the initial session is loaded.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function finishLogin(session) {
+    sessionStorage.setItem('pipeguard-auth', JSON.stringify(session))
+    setAuth(session)
+  }
+
+  async function signOut() {
+    if (auth?.access_token) {
+      await fetch(`${API_URL}/api/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${auth.access_token}` },
+      }).catch(() => {})
+    }
+    sessionStorage.removeItem('pipeguard-auth')
+    setAuth(null)
+  }
+
+  if (checkingSession) return <div className="auth-loading">Loading your PipeGuard workspace…</div>
+  return auth?.access_token
+    ? <AuthenticatedApp auth={auth} onSignOut={signOut} />
+    : <AuthScreen onAuthenticated={finishLogin} />
+}
+
+function AuthScreen({ onAuthenticated }) {
+  const [mode, setMode] = useState('login')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_URL}/api/auth/${mode === 'signup' ? 'signup' : 'login'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, ...(mode === 'signup' ? { name } : {}) }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || `Could not ${mode === 'signup' ? 'create account' : 'sign in'} (HTTP ${response.status})`)
+      onAuthenticated(data)
+    } catch (submitError) {
+      setError(submitError.message || 'Authentication failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="auth-page">
+      <section className="auth-card">
+        <div className="auth-brand"><span className="brand-mark">P</span><span><strong>pipeguard</strong><small>DevOps intelligence</small></span></div>
+        <div className="eyebrow">PERSONAL WORKSPACE</div>
+        <h1>{mode === 'signup' ? 'Create your account.' : 'Welcome back.'}</h1>
+        <p className="auth-subtitle">Sign in to access your pipelines and private incident history.</p>
+        <form onSubmit={submit}>
+          {mode === 'signup' && (
+            <label className="form-field"><span>Name</span><input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" required maxLength={80} /></label>
+          )}
+          <label className="form-field"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required maxLength={254} /></label>
+          <label className="form-field"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} required minLength={10} maxLength={128} /></label>
+          {mode === 'signup' && <p className="auth-password-hint">Use at least 10 characters.</p>}
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Sign in'}</button>
+        </form>
+        <p className="auth-switch">
+          {mode === 'signup' ? 'Already have an account?' : 'New to PipeGuard?'}{' '}
+          <button type="button" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError('') }}>
+            {mode === 'signup' ? 'Sign in' : 'Create an account'}
+          </button>
+        </p>
+      </section>
+    </main>
+  )
+}
+
+function AuthenticatedApp({ auth, onSignOut }) {
   const [activePage, setActivePage] = useState('dashboard')
+  const qloraStorageKey = `pipeguard-qlora-${auth.user?.id || auth.user?._id || auth.user?.email || 'user'}`
+  const [qloraEnabled, setQloraEnabled] = useState(() => localStorage.getItem(qloraStorageKey) === 'true')
+  const personalizationStorageKey = `pipeguard-personalization-${auth.user?.id || auth.user?._id || auth.user?.email || 'user'}`
+  const [personalizationEnabled, setPersonalizationEnabled] = useState(() => localStorage.getItem(personalizationStorageKey) === 'true')
+  const personalizationEnabledRef = useRef(personalizationEnabled)
   const [integrations, setIntegrations] = useState(initialIntegrations)
   const [selectedIntegration, setSelectedIntegration] = useState(null)
   const [formValues, setFormValues] = useState({})
@@ -139,20 +392,74 @@ function App() {
   const [githubToken, setGithubToken] = useState('')
   const [githubRepositories, setGithubRepositories] = useState([])
   const [selectedGithubRepo, setSelectedGithubRepo] = useState('')
-  const [githubCommits, setGithubCommits] = useState([])
-  const [githubDataError, setGithubDataError] = useState('')
-  const [isLoadingGithubData, setIsLoadingGithubData] = useState(false)
   const [githubConnectionStatus, setGithubConnectionStatus] = useState('disconnected')
   const [githubConnectionMessage, setGithubConnectionMessage] = useState('')
   const [prometheusUrl, setPrometheusUrl] = useState('')
-  const [prometheusTargets, setPrometheusTargets] = useState([])
-  const [prometheusSummary, setPrometheusSummary] = useState(null)
   const [prometheusConnectionStatus, setPrometheusConnectionStatus] = useState('disconnected')
   const [prometheusConnectionMessage, setPrometheusConnectionMessage] = useState('')
+  const [lokiUrl, setLokiUrl] = useState('')
+  const [lokiProjectName, setLokiProjectName] = useState('')
+  const [lokiUsername, setLokiUsername] = useState('')
+  const [lokiToken, setLokiToken] = useState('')
+  const [lokiConnectionStatus, setLokiConnectionStatus] = useState('disconnected')
+  const [lokiConnectionMessage, setLokiConnectionMessage] = useState('')
+  const [sonarqubeUrl, setSonarqubeUrl] = useState('')
+  const [sonarqubeToken, setSonarqubeToken] = useState('')
+  const [sonarqubeProjects, setSonarqubeProjects] = useState([])
+  const [selectedSonarqubeProject, setSelectedSonarqubeProject] = useState('')
+  const [sonarqubeConnectionStatus, setSonarqubeConnectionStatus] = useState('disconnected')
+  const [sonarqubeConnectionMessage, setSonarqubeConnectionMessage] = useState('')
+  const [kubernetesConfig, setKubernetesConfig] = useState(null)
+  const [kubernetesConnectionStatus, setKubernetesConnectionStatus] = useState('disconnected')
+  const [kubernetesConnectionMessage, setKubernetesConnectionMessage] = useState('')
+  const [grafanaUrl, setGrafanaUrl] = useState(DEFAULT_GRAFANA_URL)
+  const [grafanaDashboardUrl, setGrafanaDashboardUrl] = useState(PIPEGUARD_GRAFANA_DASHBOARD_URL)
+  const [grafanaConnectionMessage, setGrafanaConnectionMessage] = useState('')
   const [investigation, setInvestigation] = useState(null)
   const [isInvestigating, setIsInvestigating] = useState(false)
   const [isInvestigationModalOpen, setIsInvestigationModalOpen] = useState(false)
   const [activeInvestigationStage, setActiveInvestigationStage] = useState(0)
+  const [incidentHistoryCount, setIncidentHistoryCount] = useState(0)
+
+  useEffect(() => {
+    localStorage.setItem(qloraStorageKey, String(qloraEnabled))
+  }, [qloraEnabled, qloraStorageKey])
+
+  useEffect(() => {
+    localStorage.setItem(personalizationStorageKey, String(personalizationEnabled))
+  }, [personalizationEnabled, personalizationStorageKey])
+
+  async function changePersonalization(enabled) {
+    if (enabled) {
+      const response = await authenticatedFetch(`${API_URL}/api/learning/opt-in`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${auth.access_token}` },
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Could not enable personalized remediation.')
+      personalizationEnabledRef.current = true
+      setPersonalizationEnabled(true)
+      return data
+    }
+    personalizationEnabledRef.current = false
+    localStorage.setItem(personalizationStorageKey, 'false')
+    setPersonalizationEnabled(false)
+    return { initial_records_enrolled: 0 }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    authenticatedFetch(`${API_URL}/api/incidents/count`, {
+      headers: { Authorization: `Bearer ${auth.access_token}` },
+    })
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || `Could not load incident count (HTTP ${response.status})`)
+        if (!cancelled) setIncidentHistoryCount(data.count ?? 0)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [auth.access_token])
 
   async function investigateBuild(job) {
     if (isInvestigating) return
@@ -188,6 +495,8 @@ function App() {
       evidence: null,
       github: null,
       metrics: [],
+      loki: null,
+      sonarqube: null,
       agentStatus: 'waiting',
       agentReports: null,
       agentError: '',
@@ -196,9 +505,9 @@ function App() {
     })
   
     async function postJson(path, body) {
-      const response = await fetch(`${API_URL}${path}`, {
+      const response = await authenticatedFetch(`${API_URL}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.access_token}` },
         body: JSON.stringify(body),
       })
       const data = await response.json()
@@ -226,6 +535,8 @@ function App() {
         evidence,
         github: { status: 'loading', sha },
         metrics: [],
+        loki: null,
+        sonarqube: null,
       })
   
       // GitHub lookup is tied to the exact commit SHA found in this build.
@@ -233,6 +544,51 @@ function App() {
         status: 'not_configured',
         message: 'Connect GitHub and select the repository containing this commit.',
         sha,
+      }
+
+      // Loki is optional. Query containers labeled for this project and build.
+      let loki
+      if (!lokiUrl) {
+        loki = {
+          status: 'not_configured',
+          message: 'Connect Loki in Settings to include service logs with this investigation.',
+        }
+      } else if (!lokiProjectName) {
+        loki = {
+          status: 'not_configured',
+          message: 'Choose a PipeGuard project label in Loki settings to collect its build containers.',
+        }
+      } else if (!evidence.timestamp) {
+        loki = {
+          status: 'unavailable',
+          message: 'The selected Jenkins build has no timestamp for log alignment.',
+        }
+      } else {
+        const start = Math.floor(evidence.timestamp / 1000) - 300
+        const end = Math.ceil((evidence.timestamp + (evidence.duration_ms || 0)) / 1000) + 300
+        const query = `{project="${lokiProjectName}", build_number="${buildNumber}"}`
+        try {
+          const result = await postJson('/api/loki/query-range', {
+            url: lokiUrl,
+            project_name: lokiProjectName,
+            build_number: String(buildNumber),
+            username: lokiUsername,
+            token: lokiToken,
+            start,
+            end,
+            limit: 100,
+          })
+          loki = {
+            status: 'success',
+            query,
+            count: result.count,
+            lines: result.lines || [],
+            start,
+            end,
+          }
+        } catch (error) {
+          loki = { status: 'error', message: error.message, query, start, end, lines: [] }
+        }
       }
   
       if (!githubToken) {
@@ -256,6 +612,41 @@ function App() {
           github = { status: 'success', ...result.commit }
         } catch (error) {
           github = { status: 'error', sha, message: error.message }
+        }
+      }
+
+      let sonarqube
+      if (!sonarqubeUrl || !sonarqubeToken) {
+        sonarqube = {
+          status: 'not_configured',
+          message: 'Connect SonarQube in Settings to include project analysis evidence.',
+          issues: [],
+          measures: {},
+        }
+      } else if (!selectedSonarqubeProject) {
+        sonarqube = {
+          status: 'not_configured',
+          message: 'Select the SonarQube project that corresponds to this repository.',
+          issues: [],
+          measures: {},
+        }
+      } else {
+        try {
+          sonarqube = await postJson('/api/sonarqube/evidence', {
+            url: sonarqubeUrl,
+            token: sonarqubeToken,
+            project_key: selectedSonarqubeProject,
+            build_commit_sha: sha || '',
+            limit: 25,
+          })
+        } catch (error) {
+          sonarqube = {
+            status: 'error',
+            project_key: selectedSonarqubeProject,
+            message: error.message || 'Could not retrieve SonarQube project evidence.',
+            issues: [],
+            measures: {},
+          }
         }
       }
   
@@ -317,6 +708,8 @@ function App() {
         evidence,
         github,
         metrics,
+        loki,
+        sonarqube,
         agentStatus: 'running',
         agentReports: null,
         agentError: '',
@@ -345,8 +738,43 @@ function App() {
         },
         metrics: metrics.map((metric) => ({
           ...metric,
-          results: (metric.results || []).slice(0, 5),
+          results: (metric.results || []).slice(0, 2).map((result) => ({
+            ...result,
+            values: (result.values || []).slice(-3),
+          })),
         })),
+        loki: {
+          status: loki.status,
+          message: loki.message,
+          query: loki.query,
+          start: loki.start,
+          end: loki.end,
+          count: loki.count,
+          lines: (loki.lines || []).slice(-6).map((entry) => ({
+            ...entry,
+            line: String(entry.line ?? '').slice(-500),
+          })),
+        },
+        sonarqube: {
+          status: sonarqube.status,
+          message: sonarqube.message,
+          project_key: sonarqube.project_key,
+          analysis: sonarqube.analysis,
+          build_commit_sha: sonarqube.build_commit_sha,
+          analysis_matches_build: sonarqube.analysis_matches_build,
+          measures: sonarqube.measures,
+          quality_gate: sonarqube.quality_gate,
+          issue_count: sonarqube.issue_count,
+          issues: (sonarqube.issues || []).slice(0, 4).map((issue) => ({
+            severity: issue.severity,
+            type: issue.type,
+            rule: issue.rule,
+            component: issue.component,
+            line: issue.line,
+            status: issue.status,
+            message: String(issue.message ?? '').slice(0, 240),
+          })),
+        },
       }
   
       const debugId =
@@ -377,11 +805,14 @@ function App() {
           github_token: githubToken || '',
           github_owner: githubOwner || '',
           github_repo: githubRepoName || '',
+          use_local_llm: qloraEnabled,
+          use_personalized_answers: personalizationEnabledRef.current,
         }
   
         debugLog('STEP 2: Payload prepared', {
           jobName: job.name,
           buildNumber,
+          personalizationEnabled: personalizationEnabledRef.current,
           evidenceKeys: agentEvidence && typeof agentEvidence === 'object' ? Object.keys(agentEvidence) : [],
           hasGithubToken: Boolean(githubToken),
           githubOwner: githubOwner || '(empty)',
@@ -397,10 +828,11 @@ function App() {
   
         debugLog('STEP 4: Starting stream request', { url })
   
-        const response = await fetch(url, {
+        const response = await authenticatedFetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${auth.access_token}`,
             'X-Request-ID': debugId,
           },
           body: requestBody,
@@ -440,7 +872,7 @@ function App() {
             let event
             try {
               event = JSON.parse(line)
-            } catch (parseError) {
+            } catch {
               debugLog('STEP 6 WARNING: Could not parse SSE event', { line: line.slice(0, 200) })
               continue
             }
@@ -504,12 +936,20 @@ function App() {
               judgeHallucinationDetected: finalPayload.judge_hallucination_detected ?? null,
               judgeIssues: finalPayload.judge_issues || [],
               judgeOverallScore: finalPayload.judge_overall_score ?? null,
+            personalizationEnabled: finalPayload.personalization_enabled === true,
+            policyVersionUsed: finalPayload.policy_version_used ?? null,
             },
             agentError: '',
           }
         })
   
         debugLog('STEP 9: Investigation response processed successfully')
+        authenticatedFetch(`${API_URL}/api/incidents/count`, {
+          headers: { Authorization: `Bearer ${auth.access_token}` },
+        }).then(async (historyResponse) => {
+          const historyData = await historyResponse.json()
+          if (historyResponse.ok) setIncidentHistoryCount(historyData.count ?? 0)
+        }).catch(() => {})
       } catch (agentError) {
         debugLog('INVESTIGATION ERROR', {
           name: agentError?.name,
@@ -564,11 +1004,11 @@ function App() {
 
     if (!investigation?.incidentId) return
 
-    const response = await fetch(
+    const response = await authenticatedFetch(
       `${AGENT_API_URL}/api/incidents/${investigation.incidentId}/feedback`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.access_token}` },
         body: JSON.stringify(feedback),
       },
     )
@@ -589,9 +1029,9 @@ function App() {
     setInvestigation((current) => (current ? { ...current, isDeciding: true } : current))
 
     try {
-      const response = await fetch(`${AGENT_API_URL}/api/investigate/decision`, {
+      const response = await authenticatedFetch(`${AGENT_API_URL}/api/investigate/decision`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.access_token}` },
         body: JSON.stringify({ incident_id: investigation.incidentId, decision }),
       })
       const data = await response.json()
@@ -627,7 +1067,7 @@ function App() {
     if (!quiet) setIsRefreshing(true)
 
     try {
-      const response = await fetch(`${API_URL}/api/jenkins/jobs`, {
+      const response = await authenticatedFetch(`${API_URL}/api/jenkins/jobs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(credentials),
@@ -652,6 +1092,117 @@ function App() {
     }
   }, [])
 
+  const persistIntegrationSettings = useCallback(async (provider, config) => {
+    const response = await authenticatedFetch(`${API_URL}/api/integrations/${provider}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.access_token}`,
+      },
+      body: JSON.stringify({ config }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.detail || `Could not save ${provider} settings (HTTP ${response.status})`)
+  }, [auth.access_token])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function restoreIntegrationSettings() {
+      try {
+        const response = await authenticatedFetch(`${API_URL}/api/integrations`, {
+          headers: { Authorization: `Bearer ${auth.access_token}` },
+          cache: 'no-store',
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || `Could not restore connections (HTTP ${response.status})`)
+        if (cancelled) return
+
+        const configs = data.configs || {}
+        const connectedProviders = Object.keys(configs)
+        setIntegrations((previous) => previous.map((integration) => ({
+          ...integration,
+          connected: integration.id === 'grafana' || connectedProviders.includes(integration.id),
+        })))
+
+        if (configs.jenkins) {
+          setJenkinsCredentials(configs.jenkins)
+          setConnectionStatus('connected')
+          setConnectionMessage('Restored saved Jenkins connection.')
+          void fetchJenkinsJobs(configs.jenkins, true)
+        }
+        if (configs.github) {
+          setGithubToken(configs.github.token || '')
+          setSelectedGithubRepo(configs.github.selected_repository || '')
+          setGithubConnectionStatus('connected')
+          setGithubConnectionMessage('Restored saved GitHub connection.')
+          authenticatedFetch(`${API_URL}/api/github/repositories`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: configs.github.token || '' }),
+          }).then(async (repoResponse) => {
+            const repoData = await repoResponse.json()
+            if (repoResponse.ok && !cancelled) {
+              const repositories = repoData.repositories || []
+              setGithubRepositories(repositories)
+              if (!repositories.some((repo) => repo.full_name === configs.github.selected_repository)) {
+                setSelectedGithubRepo(repositories[0]?.full_name || '')
+              }
+            }
+          }).catch(() => {})
+        }
+        if (configs.prometheus) {
+          setPrometheusUrl(configs.prometheus.url || '')
+          setPrometheusConnectionStatus('connected')
+          setPrometheusConnectionMessage('Restored saved Prometheus connection.')
+        }
+        if (configs.loki) {
+          setLokiUrl(configs.loki.url || '')
+          setLokiProjectName(configs.loki.project_name || '')
+          setLokiUsername(configs.loki.username || '')
+          setLokiToken(configs.loki.token || '')
+          setLokiConnectionStatus('connected')
+          setLokiConnectionMessage('Restored saved Loki connection.')
+        }
+        if (configs.sonarqube) {
+          setSonarqubeUrl(configs.sonarqube.url || '')
+          setSonarqubeToken(configs.sonarqube.token || '')
+          setSelectedSonarqubeProject(configs.sonarqube.selected_project || '')
+          setSonarqubeConnectionStatus('connected')
+          setSonarqubeConnectionMessage('Restored saved SonarQube connection.')
+          authenticatedFetch(`${API_URL}/api/sonarqube/projects`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: configs.sonarqube.url || '', token: configs.sonarqube.token || '' }),
+          }).then(async (projectResponse) => {
+            const projectData = await projectResponse.json()
+            if (projectResponse.ok && !cancelled) {
+              const projects = projectData.projects || []
+              setSonarqubeProjects(projects)
+              if (!projects.some((project) => project.key === configs.sonarqube.selected_project)) {
+                setSelectedSonarqubeProject('')
+              }
+            }
+          }).catch(() => {})
+        }
+        if (configs.kubernetes) {
+          setKubernetesConfig(configs.kubernetes)
+          setKubernetesConnectionStatus('connected')
+          setKubernetesConnectionMessage('Restored saved Kubernetes connection.')
+        }
+        if (configs.grafana) {
+          setGrafanaUrl(configs.grafana.url || DEFAULT_GRAFANA_URL)
+          setGrafanaDashboardUrl(configs.grafana.dashboard_url || PIPEGUARD_GRAFANA_DASHBOARD_URL)
+        }
+      } catch (error) {
+        if (!cancelled) setPageError(error.message || 'Could not restore saved connections.')
+      }
+    }
+
+    restoreIntegrationSettings()
+    return () => { cancelled = true }
+  }, [auth.access_token, fetchJenkinsJobs])
+
   // Once connected, retrieve current Jenkins data every 10 seconds.
   useEffect(() => {
     if (!jenkinsCredentials) return undefined
@@ -664,7 +1215,7 @@ function App() {
   }, [jenkinsCredentials, fetchJenkinsJobs])
 
   function openConfiguration(integration) {
-    if (!['jenkins', 'github', 'prometheus'].includes(integration.id)) {
+    if (!['jenkins', 'github', 'prometheus', 'loki', 'sonarqube', 'kubernetes', 'grafana'].includes(integration.id)) {
       setPageError(`${integration.name} integration is not implemented yet.`)
       return
     }
@@ -672,22 +1223,225 @@ function App() {
     setPageError('')
     setConnectionMessage('')
     setGithubConnectionMessage('')
+    setLokiConnectionMessage('')
+    setSonarqubeConnectionMessage('')
     setSelectedIntegration(integration.id)
     setFormValues(
       integration.id === 'jenkins'
         ? {
-            url: 'http://192.168.56.10:8080',
-            username: '',
-            token: '',
+            url: jenkinsCredentials?.url || 'http://192.168.56.10:8080',
+            username: jenkinsCredentials?.username || '',
+            token: jenkinsCredentials?.api_token || '',
           }
         : integration.id === 'prometheus'
           ? { url: prometheusUrl || 'http://192.168.56.10:9090' }
-          : { token: '' },
+          : integration.id === 'loki'
+            ? {
+                url: lokiUrl || 'http://192.168.56.10:3100',
+                project_name: lokiProjectName,
+                username: lokiUsername,
+                token: lokiToken,
+              }
+            : integration.id === 'sonarqube'
+              ? { url: sonarqubeUrl || 'http://192.168.56.10:9000', token: sonarqubeToken }
+              : integration.id === 'kubernetes'
+                ? {
+                    url: kubernetesConfig?.url || '',
+                    namespace: kubernetesConfig?.namespace || 'pipeguard-lab',
+                    token: kubernetesConfig?.token || '',
+                    ca_certificate: kubernetesConfig?.ca_certificate || '',
+                  }
+              : integration.id === 'grafana'
+                ? {
+                    url: grafanaUrl || DEFAULT_GRAFANA_URL,
+                    dashboard_url: grafanaDashboardUrl || PIPEGUARD_GRAFANA_DASHBOARD_URL,
+                  }
+          : integration.id === 'github'
+            ? { token: githubToken }
+            : { token: '' },
     )
   }
 
   async function saveConfiguration(event) {
     event.preventDefault()
+
+    if (selectedIntegration === 'grafana') {
+      const url = (formValues.url || '').trim()
+      const dashboardUrl = (formValues.dashboard_url || PIPEGUARD_GRAFANA_DASHBOARD_URL).trim()
+      if (!isPipeGuardGrafanaDashboardUrl(dashboardUrl, url)) {
+        setGrafanaConnectionMessage('Use the PipeGuard dashboard URL or its Grafana shared-dashboard URL on the same Grafana server, not the PipeGuard frontend URL.')
+        return
+      }
+      setIsConnecting(true)
+      setGrafanaConnectionMessage('Checking Grafana health...')
+      try {
+        const response = await authenticatedFetch(`${API_URL}/api/grafana/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || `Grafana connection failed (HTTP ${response.status})`)
+        await persistIntegrationSettings('grafana', { url: url.replace(/\/$/, ''), dashboard_url: dashboardUrl })
+        setGrafanaUrl(url.replace(/\/$/, ''))
+        setGrafanaDashboardUrl(dashboardUrl)
+        setGrafanaConnectionMessage(`Grafana ${data.version} is healthy. Configure a build dashboard URL to open filtered build views.`)
+        setIntegrations((previous) => previous.map((integration) =>
+          integration.id === 'grafana' ? { ...integration, connected: true } : integration,
+        ))
+        setSelectedIntegration(null)
+      } catch (error) {
+        setGrafanaConnectionMessage(error.message || 'Could not connect to Grafana.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'kubernetes') {
+      const credentials = {
+        url: (formValues.url || '').trim(),
+        namespace: (formValues.namespace || 'pipeguard-lab').trim(),
+        token: formValues.token || '',
+        ca_certificate: (formValues.ca_certificate || '').trim(),
+      }
+      setIsConnecting(true)
+      setKubernetesConnectionStatus('connecting')
+      setKubernetesConnectionMessage('Connecting to Kubernetes and checking namespace access...')
+      try {
+        const response = await authenticatedFetch(`${API_URL}/api/kubernetes/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || `Kubernetes connection failed (HTTP ${response.status})`)
+        await persistIntegrationSettings('kubernetes', credentials)
+        setKubernetesConfig(credentials)
+        setKubernetesConnectionStatus('connected')
+        setKubernetesConnectionMessage(
+          `Connected to Kubernetes ${data.cluster_version}; namespace ${data.namespace} has ${data.counts.pods} pod(s) and ${data.counts.deployments} deployment(s).`,
+        )
+        setIntegrations((previous) => previous.map((integration) =>
+          integration.id === 'kubernetes' ? { ...integration, connected: true } : integration,
+        ))
+        setSelectedIntegration(null)
+      } catch (error) {
+        setKubernetesConnectionStatus('disconnected')
+        setKubernetesConnectionMessage(error.message || 'Could not connect to Kubernetes.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'sonarqube') {
+      const url = (formValues.url || '').trim()
+      const token = formValues.token || ''
+      const credentials = { url, token }
+
+      setIsConnecting(true)
+      setSonarqubeConnectionStatus('connecting')
+      setSonarqubeConnectionMessage('Testing SonarQube and loading projects...')
+      try {
+        const testResponse = await authenticatedFetch(`${API_URL}/api/sonarqube/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        })
+        const testData = await testResponse.json()
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `SonarQube connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const projectsResponse = await authenticatedFetch(`${API_URL}/api/sonarqube/projects`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        })
+        const projectsData = await projectsResponse.json()
+        if (!projectsResponse.ok) {
+          throw new Error(projectsData.detail || `Could not load SonarQube projects (HTTP ${projectsResponse.status})`)
+        }
+
+        const projects = projectsData.projects || []
+        const matchingProject = findMatchingSonarProject(projects, selectedGithubRepo)
+        const selectedProject = projects.some((project) => project.key === selectedSonarqubeProject)
+          ? selectedSonarqubeProject
+          : (matchingProject?.key || '')
+        await persistIntegrationSettings('sonarqube', { ...credentials, selected_project: selectedProject })
+        setSonarqubeUrl(url)
+        setSonarqubeToken(token)
+        setSonarqubeProjects(projects)
+        setSelectedSonarqubeProject(selectedProject)
+        setIntegrations((previous) => previous.map((integration) =>
+          integration.id === 'sonarqube' ? { ...integration, connected: true } : integration,
+        ))
+        setSonarqubeConnectionStatus('connected')
+        setSonarqubeConnectionMessage(
+          `Connected to SonarQube ${testData.version || ''}. ${projects.length} projects retrieved.`,
+        )
+        setSelectedIntegration(null)
+      } catch (error) {
+        setSonarqubeConnectionStatus('disconnected')
+        setSonarqubeConnectionMessage(error.message || 'Could not connect to SonarQube.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
+
+    if (selectedIntegration === 'loki') {
+      const url = (formValues.url || '').trim()
+      const projectName = (formValues.project_name || '').trim()
+      const username = (formValues.username || '').trim()
+      const token = formValues.token || ''
+      const credentials = { url, project_name: projectName, username, token }
+
+      setIsConnecting(true)
+      setLokiConnectionStatus('connecting')
+      setLokiConnectionMessage('Testing Loki and configuring Alloy for this project label...')
+      try {
+        const testResponse = await authenticatedFetch(`${API_URL}/api/loki/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        })
+        const testData = await testResponse.json()
+        if (!testResponse.ok) {
+          throw new Error(testData.detail || `Loki connection failed (HTTP ${testResponse.status})`)
+        }
+
+        const labelsResponse = await authenticatedFetch(`${API_URL}/api/loki/labels`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(credentials),
+        })
+        const labelsData = await labelsResponse.json()
+        if (!labelsResponse.ok) {
+          throw new Error(labelsData.detail || `Could not retrieve Loki labels (HTTP ${labelsResponse.status})`)
+        }
+
+        await persistIntegrationSettings('loki', credentials)
+        setLokiUrl(url)
+        setLokiProjectName(projectName)
+        setLokiUsername(username)
+        setLokiToken(token)
+        setIntegrations((previous) => previous.map((integration) =>
+          integration.id === 'loki' ? { ...integration, connected: true } : integration,
+        ))
+        setLokiConnectionStatus('connected')
+        setLokiConnectionMessage(
+          `Loki connected; Alloy is watching containers labeled for "${projectName}". ${labelsData.labels?.length || 0} stream labels available.`,
+        )
+      } catch (error) {
+        setLokiConnectionStatus('disconnected')
+        setLokiConnectionMessage(error.message || 'Could not connect to Loki.')
+      } finally {
+        setIsConnecting(false)
+      }
+      return
+    }
 
     if (selectedIntegration === 'prometheus') {
       const url = (formValues.url || '').trim()
@@ -697,7 +1451,7 @@ function App() {
       setPrometheusConnectionMessage('Testing Prometheus and retrieving active targets...')
 
       try {
-        const testResponse = await fetch(`${API_URL}/api/prometheus/test`, {
+        const testResponse = await authenticatedFetch(`${API_URL}/api/prometheus/test`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url }),
@@ -708,7 +1462,7 @@ function App() {
           throw new Error(testData.detail || `Prometheus connection failed (HTTP ${testResponse.status})`)
         }
 
-        const targetsResponse = await fetch(`${API_URL}/api/prometheus/targets`, {
+        const targetsResponse = await authenticatedFetch(`${API_URL}/api/prometheus/targets`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url }),
@@ -720,9 +1474,8 @@ function App() {
         }
 
         const targets = targetsData.targets || []
+        await persistIntegrationSettings('prometheus', { url })
         setPrometheusUrl(url)
-        setPrometheusTargets(targets)
-        setPrometheusSummary(testData)
         setIntegrations((previous) =>
           previous.map((integration) =>
             integration.id === 'prometheus'
@@ -749,10 +1502,9 @@ function App() {
       setIsConnecting(true)
       setGithubConnectionStatus('connecting')
       setGithubConnectionMessage('Testing GitHub and loading repositories...')
-      setGithubDataError('')
 
       try {
-        const testResponse = await fetch(`${API_URL}/api/github/test`, {
+        const testResponse = await authenticatedFetch(`${API_URL}/api/github/test`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -763,7 +1515,7 @@ function App() {
           throw new Error(testData.detail || `GitHub connection failed (HTTP ${testResponse.status})`)
         }
 
-        const repoResponse = await fetch(`${API_URL}/api/github/repositories`, {
+        const repoResponse = await authenticatedFetch(`${API_URL}/api/github/repositories`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -775,9 +1527,11 @@ function App() {
         }
 
         const repositories = repoData.repositories || []
+        const selectedRepository = repositories[0]?.full_name || ''
+        await persistIntegrationSettings('github', { token, selected_repository: selectedRepository })
         setGithubToken(token)
         setGithubRepositories(repositories)
-        setSelectedGithubRepo(repositories[0]?.full_name || '')
+        setSelectedGithubRepo(selectedRepository)
         setIntegrations((previous) =>
           previous.map((integration) =>
             integration.id === 'github'
@@ -789,12 +1543,6 @@ function App() {
         setGithubConnectionMessage(
           `Connected as ${testData.username}. Loaded ${repositories.length} repositories.`,
         )
-
-        if (repositories[0]?.full_name) {
-          await fetchGitHubCommits(token, repositories[0].full_name)
-        } else {
-          setGithubCommits([])
-        }
 
         setSelectedIntegration(null)
       } catch (error) {
@@ -822,7 +1570,7 @@ function App() {
     setPageError('')
 
     try {
-      const response = await fetch(`${API_URL}/api/jenkins/test`, {
+      const response = await authenticatedFetch(`${API_URL}/api/jenkins/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(credentials),
@@ -834,7 +1582,7 @@ function App() {
         throw new Error(data.detail || `Connection failed (HTTP ${response.status})`)
       }
 
-      // Keep credentials in memory only; never write them to localStorage.
+      await persistIntegrationSettings('jenkins', credentials)
       setJenkinsCredentials(credentials)
       setIntegrations((previous) =>
         previous.map((integration) =>
@@ -857,44 +1605,6 @@ function App() {
     }
   }
 
-  async function fetchGitHubCommits(token, fullName) {
-    if (!token || !fullName) {
-      setGithubCommits([])
-      return
-    }
-
-    const [owner, repository] = fullName.split('/')
-    if (!owner || !repository) return
-
-    setIsLoadingGithubData(true)
-    setGithubDataError('')
-
-    try {
-      const response = await fetch(`${API_URL}/api/github/commits`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token,
-          owner,
-          repository,
-          per_page: 10,
-        }),
-      })
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.detail || `Could not load commits (HTTP ${response.status})`)
-      }
-
-      setGithubCommits(data.commits || [])
-    } catch (error) {
-      setGithubCommits([])
-      setGithubDataError(error.message || 'Could not load commit history.')
-    } finally {
-      setIsLoadingGithubData(false)
-    }
-  }
-
   async function refreshNow() {
     if (!jenkinsCredentials) {
       setPageError('Connect Jenkins first to retrieve real pipeline data.')
@@ -904,24 +1614,42 @@ function App() {
     await fetchJenkinsJobs(jenkinsCredentials)
   }
 
+  function selectGithubRepository(repository) {
+    setSelectedGithubRepo(repository)
+    void persistIntegrationSettings('github', { token: githubToken, selected_repository: repository })
+      .catch((error) => setGithubConnectionMessage(`Repository changed, but could not save it: ${error.message}`))
+  }
+
+  function selectSonarqubeProject(projectKey) {
+    setSelectedSonarqubeProject(projectKey)
+    void persistIntegrationSettings('sonarqube', {
+      url: sonarqubeUrl,
+      token: sonarqubeToken,
+      selected_project: projectKey,
+    }).catch((error) => setSonarqubeConnectionMessage(`Project changed, but could not save it: ${error.message}`))
+  }
+
   const connectedCount = integrations.filter(
     (integration) => integration.connected,
-  ).length
-
-  const successfulJobs = jenkinsJobs.filter(
-    (job) => getBuildStatus(job) === 'SUCCESS',
   ).length
 
   const failedJobs = jenkinsJobs.filter(
     (job) => getBuildStatus(job) === 'FAILURE',
   ).length
 
-  const pageTitle = {
-    dashboard: 'Dashboard',
-    pipelines: 'Pipelines',
-    incidents: 'Incidents',
-    settings: 'Settings',
-  }[activePage] || 'Dashboard'
+  const connectedTools = integrations.filter((integration) => integration.connected)
+  const toolConfigurations = {
+    github: { token: githubToken },
+    prometheus: { url: prometheusUrl },
+    loki: { url: lokiUrl, project_name: lokiProjectName, username: lokiUsername, token: lokiToken },
+    sonarqube: { url: sonarqubeUrl, token: sonarqubeToken },
+    kubernetes: kubernetesConfig,
+    grafana: { url: grafanaUrl, dashboard_url: grafanaDashboardUrl },
+  }
+  const currentToolId = activePage.startsWith('tool:') ? activePage.slice(5) : ''
+  const pageTitle = currentToolId
+    ? integrations.find((integration) => integration.id === currentToolId)?.name || 'Tool'
+    : ({ dashboard: 'Dashboard', pipelines: 'Pipelines', incidents: 'Investigations', settings: 'Integrations' }[activePage] || 'Dashboard')
 
   return (
     <div className="app-shell">
@@ -941,22 +1669,15 @@ function App() {
           </span>
         </a>
 
-        <div className="workspace-label">WORKSPACE</div>
-        <div className="workspace-switcher">
-          <span className="workspace-avatar">P</span>
-          <span className="workspace-name">
-            <strong>Personal workspace</strong>
-            <small>Local development</small>
-          </span>
-          <span className="chevron">⌄</span>
-        </div>
-
         <div className="nav-label">PLATFORM</div>
         <nav className="navigation">
           {navigation.map((item) => (
             <button
               key={item.id}
               className={`nav-item ${activePage === item.id ? 'active' : ''}`}
+              aria-current={activePage === item.id ? 'page' : undefined}
+              aria-label={item.id === 'incidents' ? `Investigations, ${incidentHistoryCount} saved` : item.label}
+              title={item.label}
               onClick={() => {
                 setActivePage(item.id)
                 setPageError('')
@@ -965,40 +1686,53 @@ function App() {
               <span className="nav-icon">{item.icon}</span>
               {item.label}
               {item.id === 'incidents' && (
-                <span className="nav-count">{failedJobs}</span>
+                <span className="nav-count">{incidentHistoryCount}</span>
               )}
             </button>
           ))}
         </nav>
 
+        {connectedTools.some((integration) => integration.id !== 'jenkins') && (
+          <>
+            <div className="nav-label connected-tools-label">CONNECTED TOOLS</div>
+            <nav className="navigation connected-tool-navigation" aria-label="Connected tools">
+              {connectedTools.filter((integration) => integration.id !== 'jenkins').map((integration) => (
+                <button
+                  key={integration.id}
+                  className={`nav-item ${activePage === `tool:${integration.id}` ? 'active' : ''}`}
+                  aria-current={activePage === `tool:${integration.id}` ? 'page' : undefined}
+                  onClick={() => { setActivePage(`tool:${integration.id}`); setPageError('') }}
+                >
+                  <span className="nav-icon">{integration.icon}</span>{integration.name}
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
+
         <div className="nav-label settings-label">CONFIGURATION</div>
         <button
           className={`nav-item ${activePage === 'settings' ? 'active' : ''}`}
+          aria-current={activePage === 'settings' ? 'page' : undefined}
+          aria-label="Integrations"
+          title="Integrations"
           onClick={() => {
             setActivePage('settings')
             setPageError('')
           }}
         >
           <span className="nav-icon">⚙</span>
-          Settings
+          Integrations
         </button>
 
         <div className="sidebar-bottom">
-          <div className="help-card">
-            <span className="help-icon">✳</span>
-            <strong>Build with confidence</strong>
-            <p>Connect real provider data to start monitoring your pipelines.</p>
-            <button onClick={() => setActivePage('settings')}>
-              Configure tools <span>→</span>
-            </button>
-          </div>
           <div className="user-profile">
-            <div className="user-avatar">AO</div>
+            <div className="user-avatar">{(auth.user.name || auth.user.email).slice(0, 2).toUpperCase()}</div>
             <div className="user-details">
-              <strong>Workspace owner</strong>
-              <small>Administrator</small>
+              <strong>{auth.user.name || auth.user.email.split('@')[0]}</strong>
+              <small>{auth.user.email}</small>
             </div>
-            <span className="profile-menu">•••</span>
+            <button className="profile-menu sign-out-button" onClick={onSignOut} title="Sign out">Sign out</button>
           </div>
         </div>
       </aside>
@@ -1006,12 +1740,12 @@ function App() {
       <main className="main-content">
         <header className="topbar">
           <div className="breadcrumb">
-            <span>Workspace</span>
+            <span>PipeGuard</span>
             <span className="breadcrumb-divider">/</span>
             <strong>{pageTitle}</strong>
           </div>
           <div className="topbar-right">
-            <span className="environment-badge">
+            <span className="environment-badge" aria-live="polite">
               <span className={`status-dot ${connectionStatus === 'connected' ? 'green' : 'gray'}`} />
               {connectionStatus === 'connected'
                 ? 'Jenkins connected'
@@ -1019,16 +1753,6 @@ function App() {
                   ? 'Connecting...'
                   : 'Not connected'}
             </span>
-            <button
-              className="icon-button"
-              aria-label="Refresh Jenkins data"
-              title="Refresh Jenkins data"
-              onClick={refreshNow}
-              disabled={isRefreshing || !jenkinsCredentials}
-            >
-              {isRefreshing ? '…' : '↻'}
-            </button>
-            <div className="topbar-avatar">AO</div>
           </div>
         </header>
 
@@ -1042,317 +1766,42 @@ function App() {
 
           {activePage === 'dashboard' && (
             <>
-              <section className="page-heading">
+              <section className="page-heading dashboard-heading">
                 <div>
-                  <div className="eyebrow">LIVE OVERVIEW</div>
-                  <h1>Your operations<span className="heading-period">.</span></h1>
-                  <p className="page-subtitle">
-                    Real Jenkins jobs and build statuses from your environment.
-                  </p>
+                  <div className="eyebrow">OVERVIEW</div>
+                  <h1>Pipeline health<span className="heading-period">.</span></h1>
+                  <p className="page-subtitle">See what needs attention, then investigate the build with its evidence.</p>
                 </div>
-                <button className="primary-button" onClick={() => setActivePage('settings')}>
-                  <span>＋</span> Connect a tool
+                <button className="primary-button" onClick={() => setActivePage(jenkinsCredentials ? 'pipelines' : 'settings')}>
+                  {jenkinsCredentials ? 'View pipelines' : 'Connect Jenkins'} <span aria-hidden="true">→</span>
                 </button>
               </section>
 
-              <section className="welcome-banner">
-                <div className="banner-copy">
-                  <div className="banner-kicker">
-                    <span className="banner-spark">✳</span> PIPEGUARD INTELLIGENCE
-                  </div>
-                  <h2>{connectionStatus === 'connected' ? 'Your Jenkins data.' : 'Your pipelines.'}<br />
-                    {connectionStatus === 'connected' ? 'Live in PipeGuard.' : 'Under control.'}
-                  </h2>
-                  <p>
-                    {connectionStatus === 'connected'
-                      ? 'PipeGuard is retrieving actual job data from your Jenkins server and refreshing it every 10 seconds.'
-                      : 'Connect Jenkins to retrieve real jobs, build numbers, statuses and durations.'}
-                  </p>
-                  <button className="banner-button" onClick={refreshNow}>
-                    Refresh live data <span>↻</span>
-                  </button>
-                </div>
-                <div className="banner-visual" aria-hidden="true">
-                  <div className="orbit orbit-one" />
-                  <div className="orbit orbit-two" />
-                  <div className="orbit orbit-three" />
-                  <div className="visual-core"><span>✳</span></div>
-                  <div className="visual-node node-one">✓</div>
-                  <div className="visual-node node-two">⌘</div>
-                  <div className="visual-node node-three">↗</div>
-                  <div className="visual-line line-one" />
-                  <div className="visual-line line-two" />
-                </div>
+              <section className="metrics-grid dashboard-metrics" aria-label="Pipeline summary">
+                <MetricCard label="Jenkins jobs" value={jenkinsCredentials ? String(jenkinsJobs.length) : '—'} note={jenkinsCredentials ? 'Monitored jobs' : 'Connect Jenkins to begin'} icon="⑂" tone="blue" />
+                <MetricCard label="Failed latest builds" value={jenkinsCredentials ? String(failedJobs) : '—'} note="Builds that may need investigation" icon="!" tone="orange" />
+                <MetricCard label="Saved investigations" value={String(incidentHistoryCount)} note="Your investigation history" icon="◈" tone="purple" />
+                <MetricCard label="Connected sources" value={String(connectedCount)} note="Configured provider connections" icon="⌘" tone="green" />
               </section>
 
-              <section className="metrics-grid">
-                <MetricCard
-                  label="Connected tools"
-                  value={`${connectedCount} / ${integrations.length}`}
-                  note="Real backend connection"
-                  icon="⌘"
-                  tone="purple"
-                />
-                <MetricCard
-                  label="Jenkins jobs"
-                  value={jenkinsCredentials ? String(jenkinsJobs.length) : '—'}
-                  note={jenkinsCredentials ? 'Retrieved from Jenkins' : 'Connect Jenkins first'}
-                  icon="⑂"
-                  tone="blue"
-                />
-                <MetricCard
-                  label="Successful latest builds"
-                  value={jenkinsCredentials ? String(successfulJobs) : '—'}
-                  note={jenkinsCredentials ? 'Latest build result per job' : 'Awaiting live data'}
-                  icon="✓"
-                  tone="green"
-                />
-                <MetricCard
-                  label="Failed latest builds"
-                  value={jenkinsCredentials ? String(failedJobs) : '—'}
-                  note="Not the same as detected incidents"
-                  icon="!"
-                  tone="orange"
-                />
-              </section>
-
-              <section className="prometheus-panel">
-      <div className="prometheus-panel-heading">
-        <div>
-          <div className="eyebrow">MONITORING</div>
-          <h2>Prometheus targets</h2>
-          <p>Live target health retrieved from your connected Prometheus server.</p>
-        </div>
-        <span className={`prometheus-state ${prometheusConnectionStatus === 'connected' ? 'is-connected' : ''}`}>
-          <span className="status-dot" />
-          {prometheusConnectionStatus === 'connected' ? 'Connected' : 'Not connected'}
-        </span>
-      </div>
-
-      {prometheusSummary && (
-        <div className="prometheus-summary">
-          <div>
-            <span>Total targets</span>
-            <strong>{prometheusSummary.targets_total ?? prometheusTargets.length}</strong>
-          </div>
-          <div>
-            <span>Healthy</span>
-            <strong>{prometheusSummary.targets_healthy ?? 0}</strong>
-          </div>
-          <div>
-            <span>Unhealthy</span>
-            <strong>{prometheusSummary.targets_unhealthy ?? 0}</strong>
-          </div>
-          <div>
-            <span>Prometheus version</span>
-            <strong>{prometheusSummary.version || '—'}</strong>
-          </div>
-        </div>
-      )}
-
-      {prometheusTargets.length > 0 ? (
-        <div className="prometheus-table-wrap">
-          <table className="prometheus-table">
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>Instance</th>
-                <th>Health</th>
-                <th>Last scrape</th>
-                <th>Scrape URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {prometheusTargets.map((target, index) => (
-                <tr key={`${target.job}-${target.instance}-${index}`}>
-                  <td><strong>{target.job || '—'}</strong></td>
-                  <td>{target.instance || '—'}</td>
-                  <td>
-                    <span className={`prometheus-health ${target.health === 'up' ? 'health-up' : 'health-down'}`}>
-                      <span className="status-dot" />
-                      {target.health || 'unknown'}
-                    </span>
-                    {target.last_error && (
-                      <div className="prometheus-target-error">{target.last_error}</div>
-                    )}
-                  </td>
-                  <td>{target.last_scrape ? new Date(target.last_scrape).toLocaleString() : '—'}</td>
-                  <td className="prometheus-scrape-url">{target.scrape_url || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="prometheus-empty">
-          <strong>
-            {prometheusConnectionStatus === 'connecting'
-              ? 'Connecting to Prometheus…'
-              : 'No Prometheus targets loaded yet'}
-          </strong>
-          <p>
-            {prometheusConnectionMessage ||
-              'Connect Prometheus in Settings to retrieve real target health and scrape information.'}
-          </p>
-          <button className="primary-button" onClick={() => setActivePage('settings')}>
-            Configure Prometheus <span>→</span>
-          </button>
-        </div>
-      )}
-    </section>
-
-    <section className="section-heading">
+              <section className="section-heading dashboard-section-heading">
                 <div>
-                  <h2>Jenkins jobs</h2>
-                  <p>Latest build information retrieved from your actual Jenkins server.</p>
+                  <h2>{failedJobs ? 'Needs attention' : 'Latest builds'}</h2>
+                  <p>{jenkinsCredentials ? 'Recent Jenkins results. Investigate a failed build to collect its evidence.' : 'Connect Jenkins to see real jobs and build results.'}</p>
                 </div>
-                <button className="text-button" onClick={() => setActivePage('pipelines')}>
-                  View all jobs <span>→</span>
-                </button>
+                {jenkinsCredentials && <button className="text-button" onClick={() => setActivePage('pipelines')}>All pipelines <span aria-hidden="true">→</span></button>}
               </section>
 
               {jenkinsCredentials ? (
-                <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} investigationInProgress={isInvestigating} />
+                <JobsTable jobs={[...jenkinsJobs].sort((a, b) => Number(getBuildStatus(b) === 'FAILURE') - Number(getBuildStatus(a) === 'FAILURE')).slice(0, 5)} onInvestigate={investigateBuild} investigationInProgress={isInvestigating} compact />
               ) : (
-                <div className="empty-state">
-                  <div className="empty-state-icon">⑂</div>
-                  <strong>Jenkins is not connected</strong>
-                  <p>Connect Jenkins to replace placeholders with your real jobs.</p>
-                  <button className="primary-button" onClick={() => openConfiguration(integrations[0])}>
-                    Connect Jenkins <span>→</span>
-                  </button>
+                <div className="empty-state dashboard-empty-state">
+                  <strong>Start with your CI pipeline</strong>
+                  <p>Connect Jenkins to load jobs, identify failed builds, and launch evidence-backed investigations.</p>
+                  <button className="primary-button" onClick={() => openConfiguration(integrations.find((item) => item.id === 'jenkins'))}>Connect Jenkins <span aria-hidden="true">→</span></button>
                 </div>
               )}
-
-              <section className="section-heading github-section-heading">
-                <div>
-                  <h2>GitHub repositories</h2>
-                  <p>Source-code activity retrieved from your connected GitHub account.</p>
-                </div>
-                {!githubToken && (
-                  <button
-                    className="text-button"
-                    onClick={() => openConfiguration(integrations.find((item) => item.id === 'github'))}
-                  >
-                    Connect GitHub <span>→</span>
-                  </button>
-                )}
-              </section>
-
-              {githubToken ? (
-                <section className="github-browser">
-                  <div className="github-browser-toolbar">
-                    <label htmlFor="github-repository">Repository</label>
-                    <select
-                      id="github-repository"
-                      className="github-repo-select"
-                      value={selectedGithubRepo}
-                      onChange={(event) => {
-                        const fullName = event.target.value
-                        setSelectedGithubRepo(fullName)
-                        fetchGitHubCommits(githubToken, fullName)
-                      }}
-                    >
-                      {githubRepositories.map((repo) => (
-                        <option key={repo.id} value={repo.full_name}>
-                          {repo.full_name}{repo.private ? ' · private' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="github-repo-count">
-                      {githubRepositories.length} repositories
-                    </span>
-                  </div>
-
-                  {githubDataError && (
-                    <div className="error-banner" role="alert">{githubDataError}</div>
-                  )}
-
-                  {selectedGithubRepo && (
-                    <div className="github-repository-summary">
-                      <div>
-                        <strong>{selectedGithubRepo}</strong>
-                        <p>
-                          {githubRepositories.find((repo) => repo.full_name === selectedGithubRepo)?.description
-                            || 'No repository description provided.'}
-                        </p>
-                      </div>
-                      <a
-                        className="job-link"
-                        href={githubRepositories.find((repo) => repo.full_name === selectedGithubRepo)?.html_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open repository ↗
-                      </a>
-                    </div>
-                  )}
-
-                  <div className="section-heading github-commits-heading">
-                    <div>
-                      <h2>Recent commits</h2>
-                      <p>Latest commit messages and authors from the selected repository.</p>
-                    </div>
-                    {isLoadingGithubData && <span className="data-caption">Loading…</span>}
-                  </div>
-
-                  {githubCommits.length ? (
-                    <div className="jobs-table-wrap">
-                      <table className="jobs-table">
-                        <thead>
-                          <tr>
-                            <th>Commit message</th>
-                            <th>Author</th>
-                            <th>Date</th>
-                            <th>Commit</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {githubCommits.map((commit) => (
-                            <tr key={commit.sha}>
-                              <td>
-                                <strong>{(commit.message || 'No commit message').split('\n')[0]}</strong>
-                                <span className="job-subtitle">{commit.sha?.slice(0, 7)}</span>
-                              </td>
-                              <td>{commit.author || 'Unknown'}</td>
-                              <td>{formatTimestamp(commit.date)}</td>
-                              <td>
-                                <a className="job-link" href={commit.html_url} target="_blank" rel="noreferrer">
-                                  View ↗
-                                </a>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="empty-state">
-                      <strong>{isLoadingGithubData ? 'Loading commit history…' : 'No commits to display'}</strong>
-                      <p>
-                        {selectedGithubRepo
-                          ? 'No commits were returned for this repository, or the request is still loading.'
-                          : 'Select a repository to inspect its commit history.'}
-                      </p>
-                    </div>
-                  )}
-                </section>
-              ) : (
-                <div className="empty-state github-empty-state">
-                  <strong>GitHub is not connected</strong>
-                  <p>Connect GitHub to browse your real repositories and recent commits.</p>
-                </div>
-              )}
-
-              <div className="refresh-footer">
-                <span className={`status-dot ${connectionStatus === 'connected' ? 'green' : 'gray'}`} />
-                {connectionStatus === 'connected'
-                  ? `Connected · ${lastRefresh ? `Last refreshed ${lastRefresh.toLocaleTimeString()}` : 'Loading data'} · Auto-refresh every 10 seconds`
-                  : connectionMessage || 'Connect Jenkins to start retrieving live data.'}
-                <button className="text-button" onClick={refreshNow} disabled={isRefreshing || !jenkinsCredentials}>
-                  {isRefreshing ? 'Refreshing…' : 'Refresh now'}
-                </button>
-              </div>
+              {lastRefresh && jenkinsCredentials && <p className="data-caption dashboard-refresh-caption">Updated {lastRefresh.toLocaleTimeString()} · refreshes automatically every 10 seconds</p>}
             </>
           )}
 
@@ -1360,20 +1809,63 @@ function App() {
             <>
               <section className="page-heading">
                 <div>
-                  <div className="eyebrow">WORKSPACE</div>
+                  <div className="eyebrow">CONNECTIONS</div>
                   <h1>Integrations<span className="heading-period">.</span></h1>
-                  <p className="page-subtitle">Connect provider APIs to PipeGuard.</p>
+                  <p className="page-subtitle">Connect the sources PipeGuard uses to investigate builds.</p>
                 </div>
               </section>
-              <IntegrationGrid integrations={integrations} onConfigure={openConfiguration} />
+              <section className="model-mode-card" aria-labelledby="model-mode-title">
+                <div>
+                  <div className="eyebrow">INVESTIGATION MODEL</div>
+                  <h2 id="model-mode-title">Local QLoRA model</h2>
+                  <p>{qloraEnabled
+                    ? 'QLoRA is requested for Monitoring and supported Remediation steps. Start Ollama to use it; if Ollama is stopped or unavailable, those steps fall back to Groq. The model unloads after each call.'
+                    : 'The standard Groq pipeline is active. Enable QLoRA to use the local model for supported investigation steps.'}</p>
+                </div>
+                <button
+                  type="button"
+                  className={`model-mode-toggle ${qloraEnabled ? 'is-enabled' : ''}`}
+                  role="switch"
+                  aria-checked={qloraEnabled}
+                  aria-label="Use local QLoRA model"
+                  onClick={() => setQloraEnabled((enabled) => !enabled)}
+                >
+                  <span className="model-mode-toggle-thumb" />
+                  <span>{qloraEnabled ? 'QLoRA on' : 'Groq on'}</span>
+                </button>
+              </section>
+              <IntegrationGrid integrations={integrations} onConfigure={openConfiguration} onOpenTool={(id) => setActivePage(id === 'jenkins' ? 'pipelines' : `tool:${id}`)} />
               <div className="notice-box">
                 <span>ⓘ</span>
                 <p>
-                  <strong>Jenkins and GitHub have real backend connectors.</strong> Prometheus
-                  is the next integration to implement.
+                  <strong>Connect only the providers you want to use.</strong> Loki is optional;
+                  when connected, its logs are collected for the selected build time window.
+                  Trivy is integrated through Jenkins and appears when a build has an archived scan report.
                 </p>
               </div>
             </>
+          )}
+
+          {currentToolId && (
+            <ConnectedToolPage
+              toolId={currentToolId}
+              configuration={toolConfigurations[currentToolId]}
+              repositories={githubRepositories}
+              selectedRepository={selectedGithubRepo}
+              onSelectRepository={selectGithubRepository}
+              sonarProjects={sonarqubeProjects}
+              selectedSonarProject={selectedSonarqubeProject}
+              onSelectSonarProject={selectSonarqubeProject}
+              connectionMessage={{
+                github: githubConnectionMessage,
+                prometheus: prometheusConnectionMessage,
+                loki: lokiConnectionMessage,
+                sonarqube: sonarqubeConnectionMessage,
+                kubernetes: kubernetesConnectionMessage,
+                grafana: grafanaConnectionMessage,
+              }[currentToolId]}
+              onReconnect={() => openConfiguration(integrations.find((item) => item.id === currentToolId))}
+            />
           )}
 
           {activePage === 'pipelines' && (
@@ -1384,9 +1876,17 @@ function App() {
                   <h1>Pipelines<span className="heading-period">.</span></h1>
                   <p className="page-subtitle">Actual Jenkins jobs and their latest builds.</p>
                 </div>
-                <button className="primary-button" onClick={refreshNow} disabled={isRefreshing || !jenkinsCredentials}>
-                  {isRefreshing ? 'Refreshing…' : '↻ Refresh jobs'}
-                </button>
+                <div className="pipeline-page-actions">
+                  <PersonalizationToggle
+                    enabled={personalizationEnabled}
+                    onChange={changePersonalization}
+                    apiUrl={API_URL}
+                    accessToken={auth.access_token}
+                  />
+                  <button className="primary-button" onClick={refreshNow} disabled={isRefreshing || !jenkinsCredentials}>
+                    {isRefreshing ? 'Refreshing…' : '↻ Refresh jobs'}
+                  </button>
+                </div>
               </section>
               {jenkinsCredentials
                 ? <JobsTable jobs={jenkinsJobs} onInvestigate={investigateBuild} investigationInProgress={isInvestigating} />
@@ -1396,20 +1896,15 @@ function App() {
                     <button className="primary-button" onClick={() => openConfiguration(integrations[0])}>Connect Jenkins</button>
                   </div>}
               {lastRefresh && <p className="data-caption">Last refreshed: {lastRefresh.toLocaleString()}</p>}
+
             </>
           )}
 
           {activePage === 'incidents' && (
-            <section className="placeholder-page">
-              <div className="placeholder-icon">◈</div>
-              <h1>Incidents</h1>
-              <p>
-                {failedJobs > 0
-                  ? `${failedJobs} job(s) currently report a failed latest build. Incident detection and diagnosis are not implemented yet.`
-                  : 'No incident records have been created. Detecting failures and running agent investigations is the next milestone.'}
-              </p>
-              <p className="data-caption">A failed build is a signal, not yet a confirmed incident or root cause.</p>
-            </section>
+            <IncidentsDashboard
+              apiUrl={API_URL}
+              accessToken={auth.access_token}
+            />
           )}
         </div>
       </main>
@@ -1473,6 +1968,9 @@ function App() {
             <div className="investigation-modal-body">
               <BuildInvestigation
                 investigation={investigation}
+                sonarqubeUrl={sonarqubeUrl}
+                grafanaUrl={grafanaUrl}
+                grafanaDashboardUrl={grafanaDashboardUrl}
                 isLoading={isInvestigating}
                 activeStage={activeInvestigationStage}
                 onStageChange={setActiveInvestigationStage}
@@ -1508,17 +2006,29 @@ function App() {
               {selectedTool.fields.map((field) => (
                 <label className="form-field" key={field.name}>
                   <span>{field.label}</span>
-                  <input
-                    type={field.secret ? 'password' : 'text'}
-                    placeholder={field.placeholder}
-                    value={formValues[field.name] || ''}
-                    onChange={(event) => setFormValues((previous) => ({
-                      ...previous,
-                      [field.name]: event.target.value,
-                    }))}
-                    required
-                    autoComplete={field.secret ? 'new-password' : 'off'}
-                  />
+                  {field.multiline ? (
+                    <textarea
+                      rows={5}
+                      placeholder={field.placeholder}
+                      value={formValues[field.name] || ''}
+                      onChange={(event) => setFormValues((previous) => ({ ...previous, [field.name]: event.target.value }))}
+                      required={field.required !== false}
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+                  ) : (
+                    <input
+                      type={field.secret ? 'password' : 'text'}
+                      placeholder={field.placeholder}
+                      value={formValues[field.name] || ''}
+                      onChange={(event) => setFormValues((previous) => ({
+                        ...previous,
+                        [field.name]: event.target.value,
+                      }))}
+                      required={field.required !== false}
+                      autoComplete={field.secret ? 'new-password' : 'off'}
+                    />
+                  )}
                 </label>
               ))}
 
@@ -1526,13 +2036,27 @@ function App() {
                 ? githubConnectionMessage
                 : selectedIntegration === 'prometheus'
                   ? prometheusConnectionMessage
-                  : connectionMessage) && (
+                  : selectedIntegration === 'loki'
+                    ? lokiConnectionMessage
+                    : selectedIntegration === 'sonarqube'
+                      ? sonarqubeConnectionMessage
+                      : selectedIntegration === 'kubernetes'
+                        ? kubernetesConnectionMessage
+                        : selectedIntegration === 'grafana'
+                          ? grafanaConnectionMessage
+                        : connectionMessage) && (
                 <div className={`form-feedback ${
                   (selectedIntegration === 'github'
                     ? githubConnectionStatus
                     : selectedIntegration === 'prometheus'
                       ? prometheusConnectionStatus
-                      : connectionStatus) === 'connected'
+                      : selectedIntegration === 'loki'
+                        ? lokiConnectionStatus
+                        : selectedIntegration === 'sonarqube'
+                          ? sonarqubeConnectionStatus
+                          : selectedIntegration === 'kubernetes'
+                            ? kubernetesConnectionStatus
+                            : connectionStatus) === 'connected'
                     ? 'feedback-success'
                     : 'feedback-error'
                 }`}>
@@ -1540,7 +2064,15 @@ function App() {
                     ? githubConnectionMessage
                     : selectedIntegration === 'prometheus'
                       ? prometheusConnectionMessage
-                      : connectionMessage}
+                      : selectedIntegration === 'loki'
+                        ? lokiConnectionMessage
+                        : selectedIntegration === 'sonarqube'
+                          ? sonarqubeConnectionMessage
+                          : selectedIntegration === 'kubernetes'
+                            ? kubernetesConnectionMessage
+                            : selectedIntegration === 'grafana'
+                              ? grafanaConnectionMessage
+                            : connectionMessage}
                 </div>
               )}
 
@@ -1548,8 +2080,19 @@ function App() {
                 <span>ⓘ</span>
                 {selectedIntegration === 'prometheus'
                   ? 'PipeGuard queries the configured Prometheus HTTP API through its backend.'
-                  : 'Credentials are sent to the local PipeGuard backend and kept in memory only for this session.'}
+                  : selectedIntegration === 'loki'
+                    ? 'PipeGuard starts a managed Alloy collector in the configured Vagrant VM. It watches running containers labeled with this project name and records their Jenkins build label. Its Loki token is stored in a mode-600 secret file on that VM.'
+                    : selectedIntegration === 'sonarqube'
+                      ? 'PipeGuard uses this token to read project quality metrics, issues, and the latest analysis revision from SonarQube. Credentials stay in memory for this session.'
+                      : selectedIntegration === 'kubernetes'
+                        ? 'PipeGuard connects directly to the Kubernetes API using a namespace-scoped read-only token and the cluster CA certificate. Credentials stay in memory for this session.'
+                    : 'Credentials are sent to the local PipeGuard backend and kept in memory only for this session.'}
               </div>
+              {selectedIntegration === 'kubernetes' && (
+                <p className="kubernetes-setup-hint">
+                  Use a read-only service-account token scoped to this namespace. Paste the API server CA certificate in PEM format; PipeGuard verifies it and keeps both values in memory for this session.
+                </p>
+              )}
               <div className="modal-actions">
                 <button type="button" className="secondary-button" onClick={() => setSelectedIntegration(null)} disabled={isConnecting}>
                   Cancel
@@ -1562,6 +2105,7 @@ function App() {
           </section>
         </div>
       )}
+      <IncidentChatbot apiUrl={API_URL} accessToken={auth.access_token} />
     </div>
   )
 }
@@ -1569,7 +2113,7 @@ function App() {
 function MetricCard({ label, value, note, icon, tone }) {
   return (
     <article className="metric-card">
-      <div className={`metric-icon ${tone}`}>{icon}</div>
+      <div className={`metric-icon ${tone}`} aria-hidden="true">{icon}</div>
       <div className="metric-label">{label}</div>
       <div className="metric-value">{value}</div>
       <div className="metric-note">{note}</div>
@@ -1577,7 +2121,7 @@ function MetricCard({ label, value, note, icon, tone }) {
   )
 }
 
-function JobsTable({ jobs, onInvestigate, investigationInProgress }) {
+function JobsTable({ jobs, onInvestigate, investigationInProgress, compact = false }) {
   if (!jobs.length) {
     return (
       <div className="empty-state">
@@ -1588,17 +2132,18 @@ function JobsTable({ jobs, onInvestigate, investigationInProgress }) {
   }
 
   return (
-    <div className="jobs-table-wrap">
+    <div className={`jobs-table-wrap${compact ? ' jobs-table-wrap-compact' : ''}`}>
       <table className="jobs-table">
+        <caption className="visually-hidden">Latest Jenkins build status by job</caption>
         <thead>
           <tr>
             <th>Job</th>
             <th>Latest build</th>
             <th>Status</th>
-            <th>Duration</th>
+            {!compact && <th>Duration</th>}
             <th>Last run</th>
-            <th>Jenkins</th>
-            <th>Evidence</th>
+            {!compact && <th>Jenkins</th>}
+            <th>Action</th>
           </tr>
         </thead>
         <tbody>
@@ -1612,13 +2157,13 @@ function JobsTable({ jobs, onInvestigate, investigationInProgress }) {
                 </td>
                 <td>{job.last_build ? `#${job.last_build.number}` : '—'}</td>
                 <td><span className={`build-status ${statusClass(status)}`}>{status.replaceAll('_', ' ')}</span></td>
-                <td>{formatDuration(job.last_build?.duration_ms)}</td>
+                {!compact && <td>{formatDuration(job.last_build?.duration_ms)}</td>}
                 <td>{formatTimestamp(job.last_build?.timestamp)}</td>
-                <td>
+                {!compact && <td>
                   <a className="job-link" href={job.url} target="_blank" rel="noreferrer">
                     Open ↗
                   </a>
-                </td>
+                </td>}
                 <td>
                   {status === 'FAILURE' && job.last_build?.number ? (
                     <button
@@ -1626,10 +2171,10 @@ function JobsTable({ jobs, onInvestigate, investigationInProgress }) {
                       onClick={() => onInvestigate?.(job)}
                       disabled={!onInvestigate || investigationInProgress}
                     >
-                      {investigationInProgress ? 'Investigation running…' : `Investigate #${job.last_build.number} →`}
+                      {investigationInProgress ? 'Investigating…' : `Investigate #${job.last_build.number} →`}
                     </button>
                   ) : (
-                    <span className="data-caption">Failure only</span>
+                    <span className="data-caption">No action</span>
                   )}
                 </td>
               </tr>
@@ -1706,13 +2251,26 @@ function getPrometheusMetricPreview(metric) {
   return JSON.stringify(preview, null, 2)
 }
 
-function BuildInvestigation({ investigation, isLoading, activeStage, onStageChange, onDecision, onOpenFeedback }) {
+function BuildInvestigation({ investigation, sonarqubeUrl, grafanaUrl, grafanaDashboardUrl, isLoading, activeStage, onStageChange, onDecision, onOpenFeedback }) {
   const [hiddenMetricQueries, setHiddenMetricQueries] = useState([])
 
   if (!investigation) return null
 
   const evidence = investigation.evidence
   const github = investigation.github
+  let grafanaBuildUrl = ''
+  if (grafanaUrl && grafanaDashboardUrl && evidence?.timestamp) {
+    try {
+      const dashboard = new URL(grafanaDashboardUrl, grafanaUrl)
+      dashboard.searchParams.set('from', String(Math.max(0, evidence.timestamp - 300000)))
+      dashboard.searchParams.set('to', String(evidence.timestamp + (evidence.duration_ms || 0) + 300000))
+      dashboard.searchParams.set('var-jenkins_job', investigation.jobName)
+      dashboard.searchParams.set('var-build_number', String(investigation.buildNumber))
+      grafanaBuildUrl = dashboard.toString()
+    } catch {
+      grafanaBuildUrl = ''
+    }
+  }
 
   return (
     <section className="investigation-panel" aria-live="polite">
@@ -1757,7 +2315,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
 
       {isLoading && !evidence && (
         <p className="investigation-loading">
-          Collecting evidence from Jenkins, GitHub and Prometheus…
+          Collecting evidence from Jenkins and any connected providers…
         </p>
       )}
       {isLoading && evidence && investigation.agentStatus === 'running' && (
@@ -1783,6 +2341,11 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
               </strong>
             </div>
           </div>
+          {grafanaBuildUrl && (
+            <a className="job-link grafana-build-link" href={grafanaBuildUrl} target="_blank" rel="noreferrer">
+              Open this build’s Grafana dashboard ↗
+            </a>
+          )}
 
           <details className="investigation-section">
             <summary>Jenkins console log</summary>
@@ -1846,7 +2409,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
               </>
             ) : (
               <p className="provider-message">
-                {evidence.trivy?.message || 'Trivy evidence is unavailable.'}
+                {evidence.trivy?.message || 'Trivy evidence is unavailable for this build.'}
               </p>
             )}
             {evidence.url && evidence.trivy?.status === 'success' && (
@@ -1961,6 +2524,118 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                 <p className="data-caption">All metrics are hidden. Select a metric above to display it.</p>
               )}
             </div>
+          </details>
+
+          <details className="investigation-section">
+            <summary>Loki logs around the build</summary>
+            <p className="data-caption">
+              {investigation.loki?.status === 'success'
+                ? `LogQL ${investigation.loki.query} · five minutes before build start through five minutes after completion.`
+                : 'Loki is optional; connect it in Settings to include service logs.'}
+            </p>
+            {investigation.loki?.status === 'success' ? (
+              investigation.loki.lines?.length ? (
+                <div className="investigation-table-wrap">
+                  <table className="prometheus-table">
+                    <thead><tr><th>Time</th><th>Stream labels</th><th>Log line</th></tr></thead>
+                    <tbody>
+                      {investigation.loki.lines.map((entry, index) => (
+                        <tr key={`${entry.timestamp_ms}-${index}`}>
+                          <td>{entry.timestamp_ms ? formatTimestamp(entry.timestamp_ms) : 'Not available'}</td>
+                          <td>{Object.entries(entry.labels || {}).map(([key, value]) => `${key}=${value}`).join(', ') || '—'}</td>
+                          <td><span className="loki-log-line">{entry.line || '—'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="data-caption">Loki connected, but no logs matched this query and time window.</p>
+              )
+            ) : (
+              <p className="provider-message">
+                {investigation.loki?.message || 'Loki evidence is not available.'}
+              </p>
+            )}
+          </details>
+
+          <details className="investigation-section">
+            <summary>SonarQube quality and security evidence</summary>
+            <p className="data-caption">
+              Project measures and issues from the latest SonarQube analysis. The analysis revision is compared with this Jenkins build's commit when available.
+            </p>
+            {investigation.sonarqube?.status === 'success' ? (
+              <>
+                <p className="provider-message">
+                  Project: {investigation.sonarqube.project_key}
+                  {investigation.sonarqube.analysis?.date
+                    ? ` · Analysis: ${formatTimestamp(investigation.sonarqube.analysis.date)}` : ''}
+                  {investigation.sonarqube.analysis_matches_build === true
+                    ? ' · Analysis commit matches this build'
+                    : investigation.sonarqube.analysis_matches_build === false
+                      ? ' · Latest analysis is for a different commit; findings are project context only'
+                      : ' · Could not verify analysis commit against this build'}
+                </p>
+                {investigation.sonarqube.quality_gate?.status && (
+                  <p className="provider-message">
+                    Quality gate: <strong>{investigation.sonarqube.quality_gate.status}</strong>
+                  </p>
+                )}
+                {investigation.sonarqube.quality_gate_error && (
+                  <p className="provider-message">Quality gate status unavailable: {investigation.sonarqube.quality_gate_error}</p>
+                )}
+                {sonarqubeUrl && investigation.sonarqube.project_key && (
+                  <a
+                    className="job-link"
+                    href={`${sonarqubeUrl.replace(/\/$/, '')}/dashboard?id=${encodeURIComponent(investigation.sonarqube.project_key)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open project in SonarQube ↗
+                  </a>
+                )}
+                {Object.keys(investigation.sonarqube.measures || {}).length > 0 && (
+                  <div className="investigation-table-wrap">
+                    <table className="prometheus-table">
+                      <thead><tr><th>Measure</th><th>Value</th></tr></thead>
+                      <tbody>
+                        {Object.entries(investigation.sonarqube.measures).map(([metric, value]) => (
+                          <tr key={metric}>
+                            <td>{metric.replaceAll('_', ' ')}</td>
+                            <td>{value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="provider-message">
+                  {investigation.sonarqube.issue_count} issue(s) returned for this project.
+                </p>
+                {investigation.sonarqube.issues?.length ? (
+                  <div className="investigation-table-wrap">
+                    <table className="prometheus-table">
+                      <thead><tr><th>Severity</th><th>Type</th><th>Rule</th><th>Location</th><th>Issue</th></tr></thead>
+                      <tbody>
+                        {investigation.sonarqube.issues.map((issue) => (
+                          <tr key={issue.key}>
+                            <td>{issue.severity || '—'}</td>
+                            <td>{issue.type || '—'}</td>
+                            <td>{issue.rule || '—'}</td>
+                            <td>{issue.component || '—'}{issue.line ? `:${issue.line}` : ''}</td>
+                            <td>{issue.message || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="data-caption">No open SonarQube issues were returned for this project.</p>}
+              </>
+            ) : (
+              <p className="provider-message">
+                {investigation.sonarqube?.message || 'SonarQube evidence is not available.'}
+              </p>
+            )}
           </details>
         </>
       )}
@@ -2084,6 +2759,14 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                         : 'Report ready'}
                 </span>
               </header>
+
+              <section className="notice-box" aria-live="polite">
+                {investigation.agentReports.personalizationEnabled
+                  ? investigation.agentReports.policyVersionUsed != null
+                    ? `Personalized remediation guidance applied (policy v${investigation.agentReports.policyVersionUsed}).`
+                    : 'Personalization was requested, but no active policy was applied. This run used standard remediation guidance.'
+                  : 'Personalization was off. This run used standard remediation guidance.'}
+              </section>
 
               {(() => {
                 const reports = investigation.agentReports
@@ -2597,37 +3280,227 @@ function FixFeedbackModal({ investigation, onClose, onSubmit }) {
   )
 }
 
-function IntegrationGrid({ integrations, onConfigure }) {
+function IntegrationGrid({ integrations, onConfigure, onOpenTool }) {
+  const [search, setSearch] = useState('')
+  const normalizedSearch = search.trim().toLowerCase()
+  const groups = toolCatalog.map((group) => ({
+    ...group,
+    tools: group.tools.filter((tool) => !normalizedSearch || `${tool.name} ${tool.description} ${group.objective}`.toLowerCase().includes(normalizedSearch)),
+  })).filter((group) => group.tools.length)
+  const connectedTools = integrations.filter((integration) => integration.connected)
+
   return (
-    <div className="integration-grid">
-      {integrations.map((integration) => (
-        <article className="integration-card" key={integration.id}>
-          <div className="integration-card-top">
-            <div className={`integration-icon ${integration.color}`}>{integration.icon}</div>
-            <span className="connection-status">
-              <span className={`status-dot ${integration.connected ? 'green' : 'gray'}`} />
-              {integration.connected ? 'Connected' : 'Not connected'}
-            </span>
+    <div className="integrations-workspace">
+      <section className="tool-catalog" aria-labelledby="tool-catalog-title">
+        <div className="tool-catalog-heading">
+          <div><h2 id="tool-catalog-title">Find a tool</h2><p>Browse by DevOps objective, or search by name.</p></div>
+          <label className="tool-search">
+            <span className="visually-hidden">Search tools</span>
+            <span aria-hidden="true">⌕</span>
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search tools…" />
+          </label>
+        </div>
+        {groups.length ? groups.map((group) => (
+          <section className="tool-objective" key={group.objective} aria-label={group.objective}>
+            <h3>{group.objective}</h3>
+            <div className="tool-choice-grid">
+              {group.tools.map((tool) => {
+                const connected = integrations.find((integration) => integration.id === tool.id)?.connected
+                const unavailable = !tool.available && !tool.integrated
+                return (
+                  <button
+                    className={`tool-choice ${unavailable ? 'is-unavailable' : ''} ${connected ? 'is-connected' : ''}`}
+                    key={tool.name}
+                    type="button"
+                    disabled={unavailable || Boolean(tool.integrated)}
+                    title={unavailable ? tool.hint : tool.integrated || (connected ? `Manage ${tool.name}` : `Connect ${tool.name}`)}
+                    onClick={() => tool.integrated ? undefined : connected ? onOpenTool(tool.id) : onConfigure(integrations.find((item) => item.id === tool.id))}
+                  >
+                    <span className={`integration-icon ${tool.color}`} aria-hidden="true">{tool.icon}</span>
+                    <span className="tool-choice-copy"><strong>{tool.name}</strong><small>{tool.description}</small></span>
+                    <span className={`tool-choice-action ${unavailable ? 'is-muted' : ''}`}>
+                      {tool.integrated ? tool.integrated : unavailable ? tool.hint : connected ? 'Open tool' : 'Connect'}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        )) : <div className="empty-state"><strong>No tools match “{search}”</strong><p>Try another name or DevOps objective.</p></div>}
+      </section>
+
+      <section className="connected-tools-section" aria-labelledby="connected-tools-title">
+        <div className="section-heading"><div><h2 id="connected-tools-title">Connected tools</h2><p>Open each tool’s own workspace to manage its live data.</p></div></div>
+        {connectedTools.length ? (
+          <div className="connected-tool-cards">
+            {connectedTools.map((integration) => (
+              <article className="connected-tool-card" key={integration.id}>
+                <div className="integration-card-top">
+                  <div className={`integration-icon ${integration.color}`} aria-hidden="true">{integration.icon}</div>
+                  <span className="connection-status"><span className="status-dot green" />Connected</span>
+                </div>
+                <h3>{integration.name}</h3>
+                <p>{integration.description}</p>
+                <button className="primary-button" onClick={() => onOpenTool(integration.id)}>
+                  Open {integration.id === 'jenkins' ? 'pipelines' : integration.name} <span aria-hidden="true">→</span>
+                </button>
+              </article>
+            ))}
           </div>
-          <div className="integration-name">{integration.name}</div>
-          <div className="integration-category">{integration.category}</div>
-          <p className="integration-description">{integration.description}</p>
-          <div className="integration-card-footer">
-            <span className="provider-type">
-              {integration.id === 'jenkins'
-                ? integration.connected
-                  ? 'Live API · Trivy via Jenkins'
-                  : 'Provider · includes Trivy scans'
-                : integration.connected ? 'Live API' : 'Provider'}
-            </span>
-            <button className="configure-button" onClick={() => onConfigure(integration)}>
-              {integration.connected ? 'Reconnect' : 'Connect'} <span>→</span>
-            </button>
-          </div>
-        </article>
-      ))}
+        ) : (
+          <div className="empty-state connected-tools-empty"><strong>No tools connected yet</strong><p>Choose a supported tool above to connect it. Its card and workspace will appear here after the connection succeeds.</p></div>
+        )}
+      </section>
     </div>
   )
+}
+
+function ConnectedToolPage({ toolId, configuration, repositories, selectedRepository, onSelectRepository, sonarProjects, selectedSonarProject, onSelectSonarProject, connectionMessage, onReconnect }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [metricQuery, setMetricQuery] = useState('up')
+  const [metricResult, setMetricResult] = useState(null)
+  const [buildNumber, setBuildNumber] = useState('1')
+  const [logResult, setLogResult] = useState(null)
+  const selectedRepositoryParts = (selectedRepository || '').split('/')
+  const title = ({ github: 'GitHub', prometheus: 'Prometheus', loki: 'Loki', sonarqube: 'SonarQube', kubernetes: 'Kubernetes', grafana: 'Grafana' })[toolId] || 'Connected tool'
+
+  useEffect(() => {
+    if (!configuration) return undefined
+    const controller = new AbortController()
+    const load = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        let endpoint
+        let body = configuration
+        if (toolId === 'grafana') {
+          endpoint = '/api/grafana/test'
+          body = { url: configuration.url }
+        } else if (toolId === 'github') {
+          if (!selectedRepositoryParts[0] || !selectedRepositoryParts[1]) {
+            setData({ commits: [] })
+            setLoading(false)
+            return
+          }
+          endpoint = '/api/github/commits'
+          body = { token: configuration.token, owner: selectedRepositoryParts[0], repository: selectedRepositoryParts[1], per_page: 20 }
+        } else if (toolId === 'prometheus') endpoint = '/api/prometheus/targets'
+        else if (toolId === 'loki') endpoint = '/api/loki/labels'
+        else if (toolId === 'sonarqube') {
+          if (!selectedSonarProject) { setData({ projects: sonarProjects }); setLoading(false); return }
+          endpoint = '/api/sonarqube/evidence'
+          body = { ...configuration, project_key: selectedSonarProject, limit: 30 }
+        } else if (toolId === 'kubernetes') endpoint = '/api/kubernetes/overview'
+        else return
+        const response = await authenticatedFetch(`${API_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal })
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.detail || `${title} returned HTTP ${response.status}`)
+        setData(result)
+      } catch (loadError) {
+        if (loadError.name !== 'AbortError') setError(loadError.message || `Could not load ${title} data.`)
+      } finally {
+        if (!controller.signal.aborted) setLoading(false)
+      }
+    }
+    load()
+    return () => controller.abort()
+  // Load live provider data when the tool page opens or its selected resource changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolId, configuration?.url, configuration?.token, configuration?.project_name, configuration?.namespace, configuration?.username, selectedRepository, selectedSonarProject, refreshKey])
+
+  async function runPrometheusQuery(event) {
+    event.preventDefault()
+    setError('')
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/prometheus/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: configuration.url, query: metricQuery }) })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.detail || `Prometheus returned HTTP ${response.status}`)
+      setMetricResult(result)
+    } catch (queryError) { setError(queryError.message || 'Prometheus query failed.') }
+  }
+
+  async function runLokiQuery(event) {
+    event.preventDefault()
+    setError('')
+    const end = Date.now() / 1000
+    try {
+      const response = await authenticatedFetch(`${API_URL}/api/loki/query-range`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...configuration, build_number: buildNumber, start: end - 3600, end, limit: 200 }) })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.detail || `Loki returned HTTP ${response.status}`)
+      setLogResult(result)
+    } catch (queryError) { setError(queryError.message || 'Loki query failed.') }
+  }
+
+  return (
+    <section className="connected-tool-page">
+      <header className="page-heading tool-page-heading">
+        <div><div className="eyebrow">CONNECTED TOOL</div><h1>{title}<span className="heading-period">.</span></h1><p className="page-subtitle">{connectionMessage || `Manage ${title} and inspect its live data.`}</p></div>
+        <div className="tool-page-actions">
+          <button className="secondary-button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading}>↻ Refresh data</button>
+          <button className="text-button" onClick={onReconnect}>Connection settings</button>
+        </div>
+      </header>
+      {error && <div className="error-banner" role="alert">{error}</div>}
+      {loading && <p className="provider-message" role="status">Loading live {title} data…</p>}
+
+      {toolId === 'github' && (
+        <>
+          <div className="tool-management-card"><label className="form-field"><span>Repository</span><select value={selectedRepository} onChange={(event) => onSelectRepository(event.target.value)}>{repositories.map((repo) => <option value={repo.full_name} key={repo.id}>{repo.full_name}</option>)}</select></label><span className="tool-data-count">{repositories.length} accessible repositories</span></div>
+          {data?.commits?.length ? <div className="jobs-table-wrap"><table className="jobs-table"><caption className="visually-hidden">Recent GitHub commits</caption><thead><tr><th>Commit</th><th>Author</th><th>Date</th><th>Revision</th></tr></thead><tbody>{data.commits.map((commit) => <tr key={commit.sha}><td><strong>{(commit.message || 'No message').split('\n')[0]}</strong></td><td>{commit.author || 'Unknown'}</td><td>{formatTimestamp(commit.date)}</td><td><a className="job-link" href={commit.html_url} target="_blank" rel="noreferrer">{commit.sha?.slice(0, 7)} ↗</a></td></tr>)}</tbody></table></div> : !loading && <div className="empty-state"><strong>No commits to show</strong><p>Select a repository with commit history or refresh the data.</p></div>}
+        </>
+      )}
+
+      {toolId === 'prometheus' && (
+        <>
+          <div className="prometheus-summary"><div><span>Targets</span><strong>{data?.count ?? '—'}</strong></div><div><span>Healthy</span><strong>{data?.targets?.filter((target) => target.health === 'up').length ?? '—'}</strong></div><div><span>Unhealthy</span><strong>{data?.targets?.filter((target) => target.health !== 'up').length ?? '—'}</strong></div></div>
+          {data?.targets?.length ? <div className="prometheus-table-wrap"><table className="prometheus-table"><thead><tr><th>Job</th><th>Instance</th><th>Health</th><th>Last scrape</th><th>Last error</th></tr></thead><tbody>{data.targets.map((target, index) => <tr key={`${target.job}-${target.instance}-${index}`}><td>{target.job || '—'}</td><td>{target.instance || '—'}</td><td>{target.health || 'unknown'}</td><td>{target.last_scrape ? formatTimestamp(target.last_scrape) : '—'}</td><td>{target.last_error || '—'}</td></tr>)}</tbody></table></div> : !loading && <div className="empty-state"><strong>No scrape targets returned</strong><p>Prometheus is connected but has no active targets.</p></div>}
+          <form className="tool-query-card" onSubmit={runPrometheusQuery}><h2>Metric explorer</h2><p>Run an instant PromQL query against the connected server.</p><label className="form-field"><span>PromQL query</span><input value={metricQuery} onChange={(event) => setMetricQuery(event.target.value)} required /></label><button className="primary-button">Run query</button>{metricResult && <pre className="tool-json-result">{JSON.stringify(metricResult, null, 2)}</pre>}</form>
+        </>
+      )}
+
+      {toolId === 'loki' && (
+        <>
+          <section className="tool-management-card"><div><h2>Log streams</h2><p>Available Loki labels for project <strong>{configuration?.project_name}</strong>.</p></div><div className="tool-label-list">{(data?.labels || []).map((label) => <span key={label}>{label}</span>)}</div></section>
+          <form className="tool-query-card" onSubmit={runLokiQuery}><h2>Build log search</h2><p>Search the last hour of logs for a specific Jenkins build.</p><label className="form-field"><span>Build number</span><input value={buildNumber} onChange={(event) => setBuildNumber(event.target.value)} required pattern="[A-Za-z0-9_.-]+" /></label><button className="primary-button">Load build logs</button>{logResult && <div className="tool-log-results"><p>{logResult.count} log line(s) · query <code>{logResult.query}</code></p>{logResult.lines?.length ? logResult.lines.map((line, index) => <pre key={`${line.timestamp}-${index}`}>{line.line || JSON.stringify(line)}</pre>) : <p>No matching logs in the last hour.</p>}</div>}</form>
+        </>
+      )}
+
+      {toolId === 'sonarqube' && (
+        <>
+          <div className="tool-management-card"><label className="form-field"><span>Project</span><select value={selectedSonarProject} onChange={(event) => onSelectSonarProject(event.target.value)}><option value="">Select a project</option>{sonarProjects.map((project) => <option value={project.key} key={project.key}>{project.name} · {project.key}</option>)}</select></label><span className="tool-data-count">{sonarProjects.length} projects</span></div>
+          {data?.measures && <div className="prometheus-summary">{Object.entries(data.measures).map(([key, value]) => <div key={key}><span>{key.replaceAll('_', ' ')}</span><strong>{value}</strong></div>)}</div>}
+          {data?.issues?.length ? <div className="jobs-table-wrap"><table className="jobs-table"><thead><tr><th>Severity</th><th>Type</th><th>Rule</th><th>Location</th><th>Issue</th></tr></thead><tbody>{data.issues.map((issue) => <tr key={issue.key || `${issue.rule}-${issue.component}-${issue.line}`}><td>{issue.severity || '—'}</td><td>{issue.type || '—'}</td><td>{issue.rule || '—'}</td><td>{issue.component || '—'}{issue.line ? `:${issue.line}` : ''}</td><td>{issue.message || '—'}</td></tr>)}</tbody></table></div> : selectedSonarProject && !loading && <div className="empty-state"><strong>No open issues returned</strong><p>Quality data is current for {selectedSonarProject}.</p></div>}
+          {data?.projects && !selectedSonarProject && <p className="data-caption">Select a project to load its quality gate, measures and issues.</p>}
+        </>
+      )}
+
+      {toolId === 'kubernetes' && (
+        <>
+          {data?.counts && <div className="prometheus-summary"><div><span>Namespace</span><strong>{data.namespace}</strong></div><div><span>Deployments ready</span><strong>{data.counts.ready_deployments}/{data.counts.deployments}</strong></div><div><span>Pods ready</span><strong>{data.counts.ready_pods}/{data.counts.pods}</strong></div><div><span>Services</span><strong>{data.counts.services}</strong></div></div>}
+          <div className="tool-resource-grid"><ResourceTable title="Deployments" columns={['Name', 'Ready', 'Images']} rows={(data?.deployments || []).map((item) => [item.name, `${item.ready_replicas}/${item.desired_replicas}`, item.images?.join(', ') || '—'])} /><ResourceTable title="Pods" columns={['Name', 'Status', 'Restarts']} rows={(data?.pods || []).map((item) => [item.name, item.ready ? 'Ready' : item.phase, String(item.restarts)])} /></div>
+          <section className="tool-query-card"><h2>Recent warning events</h2>{data?.events?.length ? data.events.map((event, index) => <p className="tool-event" key={`${event.reason}-${event.object}-${index}`}><strong>{event.reason} · {event.object}</strong> {event.message}</p>) : <p>No warning events in this namespace.</p>}</section>
+        </>
+      )}
+
+      {toolId === 'grafana' && (
+        <section className="grafana-tool-panel">
+          <div className="tool-management-card"><div><h2>Grafana dashboard</h2><p>{data?.version || connectionMessage || 'Grafana health check succeeded.'}</p></div><a className="primary-button" href={configuration?.dashboard_url || configuration?.url} target="_blank" rel="noreferrer">Open Grafana ↗</a></div>
+          {isPipeGuardGrafanaDashboardUrl(configuration?.dashboard_url, configuration?.url) ? (
+            <iframe title="PipeGuard observability dashboard" src={configuration.dashboard_url} loading="lazy" />
+          ) : (
+            <div className="empty-state"><strong>PipeGuard dashboard URL is not configured</strong><p>Reconnect Grafana and enter its PipeGuard dashboard URL or a Grafana shared-dashboard URL.</p></div>
+          )}
+        </section>
+      )}
+    </section>
+  )
+}
+
+function ResourceTable({ title, columns, rows }) {
+  return <section className="tool-resource-table"><h2>{title}</h2>{rows.length ? <div className="prometheus-table-wrap"><table className="prometheus-table"><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${title}-${index}`}>{row.map((cell, cellIndex) => <td key={`${title}-${index}-${cellIndex}`}>{cell}</td>)}</tr>)}</tbody></table></div> : <p className="data-caption">No {title.toLowerCase()} in the connected namespace.</p>}</section>
 }
 
 export default App

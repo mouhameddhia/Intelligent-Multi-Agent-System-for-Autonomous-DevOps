@@ -1,3 +1,7 @@
+import base64
+import re
+from urllib.parse import quote
+
 import httpx
 
 GITHUB_API_URL = "https://api.github.com"
@@ -111,8 +115,10 @@ class GitHubConnector:
         repository = repository.strip()
         sha = sha.strip()
 
-        if not owner or not repository:
-            raise ValueError("Repository owner and name are required.")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", owner) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,100}", repository
+        ):
+            raise ValueError("Repository owner and name must be valid GitHub path segments.")
         if not re.fullmatch(r"[0-9a-fA-F]{7,64}", sha):
             raise ValueError("A valid Git commit SHA is required.")
 
@@ -145,6 +151,83 @@ class GitHubConnector:
                 for item in files
                 if isinstance(item, dict)
             ],
+        }
+
+    def get_file_content(
+        self,
+        owner: str,
+        repository: str,
+        path: str,
+        ref: str,
+        *,
+        max_bytes: int = 256_000,
+    ) -> dict:
+        """Read one text source file at an exact commit, never a moving branch."""
+        owner = owner.strip()
+        repository = repository.strip()
+        path = path.strip().replace("\\", "/")
+        ref = ref.strip()
+
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", owner) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,100}", repository
+        ):
+            raise ValueError("Repository owner and name must be valid GitHub path segments.")
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", ref):
+            raise ValueError("A full build commit SHA is required for source inspection.")
+        path_parts = path.split("/")
+        if (
+            not path
+            or path.startswith("/")
+            or any(part in {"", ".", ".."} for part in path_parts)
+            or any(part.startswith(".") for part in path_parts)
+        ):
+            raise ValueError("Use a repository-relative, non-hidden file path.")
+        if not path.lower().endswith((
+            ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".java", ".go",
+            ".rs", ".rb", ".php", ".cs", ".cpp", ".c", ".h", ".toml",
+            ".yaml", ".yml", ".json",
+        )):
+            raise ValueError("Only source, test, and build-configuration files can be inspected.")
+        lowered_path = path.lower()
+        if any(
+            part in lowered_path
+            for part in (
+                ".env", "secret", "credential", "password", "private_key",
+                "api_key", "apikey", "access_token", "token",
+            )
+        ):
+            raise ValueError("Sensitive-looking file paths cannot be sent to the remediation model.")
+
+        encoded_path = quote(path, safe="/")
+        data = self._get(
+            f"/repos/{owner}/{repository}/contents/{encoded_path}",
+            {"ref": ref},
+        )
+        if not isinstance(data, dict) or data.get("type") != "file":
+            raise GitHubConnectionError("GitHub did not return a regular file for that path.")
+
+        size = data.get("size")
+        if isinstance(size, int) and size > max_bytes:
+            raise GitHubConnectionError(
+                f"Refusing to send {path}: file exceeds the {max_bytes}-byte inspection limit."
+            )
+        if data.get("encoding") != "base64" or not isinstance(data.get("content"), str):
+            raise GitHubConnectionError("GitHub did not return an inspectable text file.")
+
+        try:
+            content = base64.b64decode(data["content"], validate=False).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubConnectionError("The selected repository file is not UTF-8 text.") from exc
+
+        if len(content.encode("utf-8")) > max_bytes:
+            raise GitHubConnectionError(
+                f"Refusing to send {path}: decoded file exceeds the {max_bytes}-byte inspection limit."
+            )
+        return {
+            "path": path,
+            "ref": ref,
+            "blob_sha": data.get("sha"),
+            "content": content,
         }
 
     def get_commits(

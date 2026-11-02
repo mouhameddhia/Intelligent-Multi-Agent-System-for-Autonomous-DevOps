@@ -68,20 +68,34 @@ def compact_evidence(
 
         if isinstance(value, list):
             # Keep representative evidence instead of large provider payloads.
-            limit = file_list_limit if "file" in key.lower() else 5
+            if "file" in key.lower():
+                limit = file_list_limit
+            elif key.lower() in {"lines", "logs"}:
+                limit = 6
+            elif key.lower() == "issues":
+                limit = 12
+            else:
+                limit = 5
             return [compact(item, key) for item in value[:limit]]
 
         if isinstance(value, str):
             normalized_key = key.lower().replace("-", "_").replace(" ", "_")
             if normalized_key in {"patch", "diff"}:
                 limit = patch_limit
+            elif normalized_key in {"source_excerpt", "code_excerpt"}:
+                limit = 1800
             elif _is_console_log(key):
                 limit = console_log_limit
             else:
                 limit = 1500
 
             if len(value) > limit:
-                return value[:limit] + "\\n[truncated for LLM context]"
+                if _is_console_log(key):
+                    return (
+                        "[earlier console output omitted; retaining the final build lines]\n"
+                        + value[-limit:]
+                    )
+                return value[:limit] + "\n[truncated for LLM context]"
             return value
 
         return value

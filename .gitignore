@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+backend/.local-secrets/
+backend/training/data/
 me.txt
 *.bak
 # Python

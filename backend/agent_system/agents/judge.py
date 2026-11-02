@@ -58,6 +58,10 @@ Rules:
   that the underlying root cause is the same.
 - A file entry marked patch_status="omitted_by_token_budget" provides path
   and change-count metadata only; do not treat its code as inspected.
+- GitHub `source_inspections` are read-only excerpts fetched at the exact
+  investigated build SHA; use them to verify code-specific remediation claims.
+- SonarQube data is tied to this build only when `analysis_matches_build` is
+  true; otherwise it is project context and cannot prove the build's cause.
 - Check the supplied historical diagnosis and evidence before accepting a
   historical root-cause match. If either is missing, say the match cannot be
   verified from the available evidence.
@@ -260,6 +264,15 @@ def _extract_text(content) -> str:
     return ""
 def run_llm_judge(state: InvestigationState) -> InvestigationState:
     evidence = state.get("evidence") or {}
+    source_inspections = state.get("remediation_source_evidence") or []
+    if source_inspections:
+        evidence = {
+            **evidence,
+            "github": {
+                **(evidence.get("github") or {}),
+                "source_inspections": source_inspections,
+            },
+        }
     historical_incident = state.get("historical_incident")
     focus_text = "\n".join([
         state.get("monitoring_report", ""),

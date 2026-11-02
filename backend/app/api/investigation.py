@@ -9,15 +9,20 @@ import faulthandler
 import os
 import sys
 import threading
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from langgraph.types import Command
 
 from agent_system.orchestrator.graph import investigation_graph
-from agent_system.db import save_incident, get_incident, list_incidents
+from agent_system.config import settings
+from agent_system.llm_log import performance_summary
+from agent_system.db import DatabaseUnavailableError, count_incidents, save_incident, update_incident, get_incident, list_incidents
+from pymongo.errors import PyMongoError
 from agent_system.agents.report_assembly import build_unified_report
 from agent_system.agents.confidence import summarize_confidence, judge_overall_score
+from app.api.auth import require_user
+from agent_system.learning.recorder import schedule_record
 
 router = APIRouter(tags=["investigation"])
 logger = logging.getLogger(__name__)
@@ -41,6 +46,8 @@ class InvestigateRequest(BaseModel):
     engineer_id: str = "devops-engineer"
     source: str = "jenkins_build"
     incident_type: str = ""
+    use_local_llm: bool = False
+    use_personalized_answers: bool = False
 
 
 class InvestigateResponse(BaseModel):
@@ -63,8 +70,12 @@ class InvestigateResponse(BaseModel):
     judge_issues: list[str] = Field(default_factory=list)
     judge_overall_score: int | None = None
     steps: list[dict[str, Any]] = Field(default_factory=list)
+    pipeline_duration_ms: int = 0
+    llm_performance: dict[str, Any] = Field(default_factory=dict)
     engineer_id: str = ""
     source: str = ""
+    personalization_enabled: bool = False
+    policy_version_used: int | None = None
 
 
 class DecisionRequest(BaseModel):
@@ -82,13 +93,14 @@ class DecisionResponse(BaseModel):
 
 
 @router.post("/api/investigate", response_model=InvestigateResponse)
-def investigate(request: InvestigateRequest, http_request: Request):
+def investigate(request: InvestigateRequest, http_request: Request, user: dict = Depends(require_user)):
     """Run Monitoring -> Diagnosis -> Remediation, then pause for approval."""
 
     incident_id = str(uuid.uuid4())
 
     initial_state = {
         "incident_id": incident_id,
+        "user_id": str(user["_id"]),
         "job_name": request.job_name,
         "build_number": request.build_number,
         "jenkins_url": request.jenkins_url,
@@ -98,9 +110,11 @@ def investigate(request: InvestigateRequest, http_request: Request):
         "github_token": request.github_token,
         "github_owner": request.github_owner,
         "github_repo": request.github_repo,
-        "engineer_id": request.engineer_id,
+        "engineer_id": user["name"],
         "source": request.source,
         "incident_type": request.incident_type,
+        "use_local_llm": request.use_local_llm,
+        "use_personalized_answers": request.use_personalized_answers and settings.learning_enabled,
         "steps": [],
         "monitoring_report": "",
         "diagnosis_report": "",
@@ -108,6 +122,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
         "approval_status": "",
         "fix_result": {},
         "historical_incident": None,
+        "llm_calls": [],
         "judge_verdict": "",
         "judge_scores": {},
         "judge_historical_match_quality": None,
@@ -121,7 +136,14 @@ def investigate(request: InvestigateRequest, http_request: Request):
     }
 
     try:
+        pipeline_started = time.perf_counter()
         result = investigation_graph.invoke(initial_state, config=config)
+        pipeline_duration_ms = round((time.perf_counter() - pipeline_started) * 1000)
+        llm_calls = result.get("llm_calls", [])
+        llm_performance = performance_summary(
+            llm_calls,
+            qlora_requested=request.use_local_llm,
+        )
 
         # Diagnosis already retrieved, judged, and verified this via its
         # search_similar_incidents tool + resolve_historical_match() — the API
@@ -139,12 +161,14 @@ def investigate(request: InvestigateRequest, http_request: Request):
 
         incident_document = {
             "_id": incident_id,
+            "user_id": str(user["_id"]),
             "job_name": request.job_name,
             "build_number": request.build_number,
             "evidence": request.evidence,
             "monitoring_report": result.get("monitoring_report", ""),
             "diagnosis_report": result.get("diagnosis_report", ""),
             "remediation_report": result.get("remediation_report", ""),
+            "remediation_source_evidence": result.get("remediation_source_evidence", []),
             "unified_report": unified_report,
             "historical_incident": historical_incident,
             "agent_confidence": agent_confidence,
@@ -157,10 +181,15 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "judge_issues": result.get("judge_issues", []),
             "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
             "schema_version": 4,
-            "engineer_id": request.engineer_id,
+            "engineer_id": user["name"],
             "source": request.source,
             "incident_type": request.incident_type,
             "steps": result.get("steps", []),
+            "personalization_enabled": request.use_personalized_answers and settings.learning_enabled,
+            "policy_version_used": result.get("policy_version_used"),
+            "pipeline_duration_ms": pipeline_duration_ms,
+            "llm_performance": llm_performance,
+            "llm_calls": llm_calls if settings.store_llm_calls else [],
             "solved_step_id": None,
             "status": "awaiting_approval",
             "decision": None,
@@ -169,7 +198,7 @@ def investigate(request: InvestigateRequest, http_request: Request):
             "updated_at": _now(),
         }
 
-        save_incident(incident_document)
+        save_incident(incident_document, raise_on_error=True)
 
         return InvestigateResponse(
             incident_id=incident_id,
@@ -191,10 +220,16 @@ def investigate(request: InvestigateRequest, http_request: Request):
             judge_issues=result.get("judge_issues", []),
             judge_overall_score=judge_overall_score(result.get("judge_scores") or {}),
             steps=result.get("steps", []),
-            engineer_id=request.engineer_id,
+            pipeline_duration_ms=pipeline_duration_ms,
+            llm_performance=llm_performance,
+            engineer_id=user["name"],
             source=request.source,
+            personalization_enabled=request.use_personalized_answers and settings.learning_enabled,
+            policy_version_used=result.get("policy_version_used"),
         )
 
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Incident storage is unavailable; the investigation was not saved.") from exc
     except HTTPException:
         raise
 
@@ -211,12 +246,15 @@ def investigate(request: InvestigateRequest, http_request: Request):
 
 
 @router.post("/api/investigate/decision", response_model=DecisionResponse)
-def decide(request: DecisionRequest, http_request: Request):
+def decide(request: DecisionRequest, http_request: Request, user: dict = Depends(require_user)):
     """Resume a paused investigation with the engineer's decision."""
 
     config = {"configurable": {"thread_id": request.incident_id}}
 
     try:
+        incident = get_incident(request.incident_id, user_id=str(user["_id"]))
+        if incident is None:
+            raise HTTPException(status_code=404, detail="Incident not found.")
         graph_state = investigation_graph.get_state(config)
 
         if not graph_state.next:
@@ -241,17 +279,18 @@ def decide(request: DecisionRequest, http_request: Request):
         )
         fix_result = result.get("fix_result") or None
 
-        save_incident({
-            "_id": request.incident_id,
+        update_incident(request.incident_id, str(user["_id"]), {
             "status": status,
             "decision": {
                 "decision": request.decision,
-                "approver": request.approver,
+                "approver": user["name"],
                 "decided_at": _now(),
             },
             "fix_result": fix_result,
             "updated_at": _now(),
         })
+        if incident.get("personalization_enabled") is True:
+            schedule_record(request.incident_id, str(user["_id"]))
 
         if request.decision == "deny":
             message = "Denied by devops engineer. No changes were made."
@@ -267,6 +306,8 @@ def decide(request: DecisionRequest, http_request: Request):
             message=message,
         )
 
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Incident storage is unavailable.") from exc
     except HTTPException:
         raise
 
@@ -282,19 +323,19 @@ def decide(request: DecisionRequest, http_request: Request):
 
 
 @router.get("/api/incidents")
-def get_incidents(limit: int = 20):
+def get_incidents(limit: int = 20, user: dict = Depends(require_user)):
     """List recent incidents."""
     request_id = str(uuid.uuid4())
     started = time.perf_counter()
 
 
     try:
-        incidents = list_incidents(limit=limit)
+        incidents = list_incidents(limit=limit, user_id=str(user["_id"]))
+        total_count = count_incidents(user_id=str(user["_id"]))
+        return {"count": total_count, "returned_count": len(incidents), "incidents": incidents}
 
-        
-
-        return {"count": len(incidents), "incidents": incidents}
-
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Incident storage is unavailable.") from exc
     except Exception:
         logger.exception(
             "INVESTIGATION_TRACE get_incidents_failed request_id=%s",
@@ -304,7 +345,7 @@ def get_incidents(limit: int = 20):
 
 
 @router.get("/api/incidents/{incident_id}")
-def get_incident_by_id(incident_id: str):
+def get_incident_by_id(incident_id: str, user: dict = Depends(require_user)):
     """Fetch one incident document."""
     request_id = str(uuid.uuid4())
     started = time.perf_counter()
@@ -312,7 +353,7 @@ def get_incident_by_id(incident_id: str):
 
 
     try:
-        incident = get_incident(incident_id)
+        incident = get_incident(incident_id, user_id=str(user["_id"]))
 
 
 
@@ -327,6 +368,8 @@ def get_incident_by_id(incident_id: str):
 
         return incident
 
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Incident storage is unavailable.") from exc
     except HTTPException:
         raise
 
@@ -338,11 +381,14 @@ def get_incident_by_id(incident_id: str):
         raise
 
 @router.get("/api/judge/calibration")
-def get_judge_calibration(limit: int = 500):
+def get_judge_calibration(limit: int = 500, user: dict = Depends(require_user)):
     """How often the judge's predicted-good/bad call matched what engineers
     actually reported. Best-effort: incidents without feedback or without a
     judge score are simply excluded, not counted as wrong."""
-    incidents = list_incidents(limit=limit)
+    try:
+        incidents = list_incidents(limit=limit, user_id=str(user["_id"]))
+    except DatabaseUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Incident storage is unavailable.") from exc
     calibrated = [
         inc.get("judge_calibration")
         for inc in incidents
@@ -361,7 +407,7 @@ def get_judge_calibration(limit: int = 500):
 
 
 @router.post("/api/investigate/stream")
-def investigate_stream(request: InvestigateRequest, http_request: Request):
+def investigate_stream(request: InvestigateRequest, http_request: Request, user: dict = Depends(require_user)):
     """Same pipeline as /api/investigate, but streams a Server-Sent Event per
     node as it completes, so the frontend can show live step-by-step
     progress instead of one long silent wait."""
@@ -369,6 +415,7 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
 
     initial_state = {
         "incident_id": incident_id,
+        "user_id": str(user["_id"]),
         "job_name": request.job_name,
         "build_number": request.build_number,
         "jenkins_url": request.jenkins_url,
@@ -378,9 +425,11 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
         "github_token": request.github_token,
         "github_owner": request.github_owner,
         "github_repo": request.github_repo,
-        "engineer_id": request.engineer_id,
+        "engineer_id": user["name"],
         "source": request.source,
         "incident_type": request.incident_type,
+        "use_local_llm": request.use_local_llm,
+                "use_personalized_answers": request.use_personalized_answers and settings.learning_enabled,
         "steps": [],
         "monitoring_report": "",
         "diagnosis_report": "",
@@ -402,6 +451,7 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
 
     def event_stream():
         node_started_at = time.perf_counter()
+        pipeline_started_at = time.perf_counter()
         try:
             for update in investigation_graph.stream(initial_state, config=config, stream_mode="updates"):
                 for node_name in update:
@@ -420,6 +470,11 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
             # already uses.
             graph_state = investigation_graph.get_state(config)
             result = graph_state.values
+            pipeline_duration_ms = round((time.perf_counter() - pipeline_started_at) * 1000)
+            llm_calls = result.get("llm_calls", [])
+            llm_performance = performance_summary(
+                llm_calls, qlora_requested=request.use_local_llm
+            )
 
             historical_incident = result.get("historical_incident")
             agent_confidence, overall_confidence = summarize_confidence(result)
@@ -428,6 +483,7 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
 
             incident_document = {
                 "_id": incident_id,
+                "user_id": str(user["_id"]),
                 "job_name": request.job_name,
                 "build_number": request.build_number,
                 "evidence": request.evidence,
@@ -446,10 +502,15 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
                 "judge_issues": result.get("judge_issues", []),
                 "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
                 "schema_version": 4,
-                "engineer_id": request.engineer_id,
+                "engineer_id": user["name"],
                 "source": request.source,
                 "incident_type": request.incident_type,
                 "steps": result.get("steps", []),
+                "personalization_enabled": request.use_personalized_answers and settings.learning_enabled,
+                "policy_version_used": result.get("policy_version_used"),
+                "pipeline_duration_ms": pipeline_duration_ms,
+                "llm_performance": llm_performance,
+                "llm_calls": llm_calls if settings.store_llm_calls else [],
                 "solved_step_id": None,
                 "status": "awaiting_approval",
                 "decision": None,
@@ -457,7 +518,7 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
                 "created_at": _now(),
                 "updated_at": _now(),
             }
-            save_incident(incident_document)
+            save_incident(incident_document, raise_on_error=True)
 
             payload = {
                 "incident_id": incident_id,
@@ -479,8 +540,12 @@ def investigate_stream(request: InvestigateRequest, http_request: Request):
                 "judge_issues": result.get("judge_issues", []),
                 "judge_overall_score": judge_overall_score(result.get("judge_scores") or {}),
                 "steps": result.get("steps", []),
-                "engineer_id": request.engineer_id,
+                "pipeline_duration_ms": pipeline_duration_ms,
+                "llm_performance": llm_performance,
+                "engineer_id": user["name"],
                 "source": request.source,
+                "personalization_enabled": request.use_personalized_answers and settings.learning_enabled,
+                "policy_version_used": result.get("policy_version_used"),
             }
             yield f"data: {json.dumps({'type': 'complete', 'data': payload})}\n\n"
 
@@ -503,14 +568,14 @@ class FeedbackRequest(BaseModel):
 
 
 @router.post("/api/incidents/{incident_id}/feedback")
-def submit_feedback(incident_id: str, request: FeedbackRequest):
+def submit_feedback(incident_id: str, request: FeedbackRequest, user: dict = Depends(require_user)):
     """Store feedback and manual-resolution step outcomes."""
     request_id = str(uuid.uuid4())
     started = time.perf_counter()
 
     try:
 
-        incident = get_incident(incident_id)
+        incident = get_incident(incident_id, user_id=str(user["_id"]))
 
 
 
@@ -538,13 +603,12 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
         } if judge_score is not None else None
 
         doc = {
-            "_id": incident_id,
             "feedback": {
                 "build_passed": request.build_passed,
                 "liked_fix": request.liked_fix,
                 "system_efficient": request.system_efficient,
                 "comment": request.comment.strip(),
-                "submitted_by": request.submitted_by,
+                "submitted_by": user["name"],
                 "submitted_at": _now(),
             },
             "resolution_path": request.resolution_path,
@@ -597,7 +661,11 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
             doc["solved_step_id"] = request.solved_step_id
 
 
-        save_incident(doc)
+        if not update_incident(incident_id, str(user["_id"]), doc):
+            raise HTTPException(status_code=404, detail="Incident not found.")
+
+        if incident.get("personalization_enabled") is True:
+            schedule_record(incident_id, str(user["_id"]))
 
 
 
@@ -608,6 +676,21 @@ def submit_feedback(incident_id: str, request: FeedbackRequest):
 
     except HTTPException:
         raise
+
+    except (DatabaseUnavailableError, PyMongoError) as exc:
+        logger.warning(
+            "INVESTIGATION_TRACE feedback_database_unavailable request_id=%s error_type=%s",
+            request_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Feedback could not be saved because the incident database is "
+                "temporarily unreachable. Check the MongoDB Atlas network/TLS "
+                "connection and submit again."
+            ),
+        ) from exc
 
     except Exception:
         logger.exception(

@@ -65,8 +65,10 @@ def _condense(doc: dict) -> dict[str, Any] | None:
     }
 
 
-def retrieve_memory_context(job_name: str, files_touched: list[str], limit: int = MAX_MEMORY_ITEMS) -> list[dict]:
-    raw_docs = find_similar_incidents(job_name=job_name, files_touched=files_touched, limit=limit)
+def retrieve_memory_context(job_name: str, files_touched: list[str], limit: int = MAX_MEMORY_ITEMS, user_id: str | None = None) -> list[dict]:
+    raw_docs = find_similar_incidents(
+        job_name=job_name, files_touched=files_touched, limit=limit, user_id=user_id
+    )
     condensed = [item for item in (_condense(doc) for doc in raw_docs) if item]
     return condensed[:limit]
 
@@ -80,7 +82,9 @@ def run_retrieve_memory(state: InvestigationState) -> InvestigationState:
         if isinstance(f, dict) and f.get("filename")
     ]
 
-    memory_context = retrieve_memory_context(state.get("job_name", ""), files_touched)
+    memory_context = retrieve_memory_context(
+        state.get("job_name", ""), files_touched, user_id=state.get("user_id")
+    )
     return {**state, "memory_context": memory_context}
 
 

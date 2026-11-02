@@ -2,8 +2,12 @@ fastapi
 uvicorn
 langchain
 langchain-groq
+langchain-ollama
 langchain-core
 langgraph
 pydantic-settings
 httpx
+pymongo
+cryptography
 langchain-google-genai
+pytest

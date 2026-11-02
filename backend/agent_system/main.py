@@ -1,11 +1,12 @@
 import uvicorn
 from typing import Any
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from agent_system.config import settings
 from agent_system.orchestrator.graph import investigation_graph
+from app.api.auth import require_user
 
 app = FastAPI(
     title="PipeGuard Agent API",
@@ -18,13 +19,13 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
 class InvestigateRequest(BaseModel):
-    job_name: str
-    build_number: int
+    job_name: str = Field(min_length=1, max_length=256)
+    build_number: int = Field(ge=1)
     # Jenkins credentials are optional.
     # When provided, agents fetch real build data.
     # When absent, agents use the synthetic scenario from data.py.
@@ -58,7 +59,7 @@ def health():
 
 
 @app.post("/api/investigate", response_model=InvestigateResponse)
-def investigate(request: InvestigateRequest):
+def investigate(request: InvestigateRequest, _user: dict = Depends(require_user)):
     """
     Trigger the full investigation pipeline for a failed Jenkins build.
     Runs: Monitoring -> Diagnosis -> Remediation (via LangGraph).
@@ -79,9 +80,12 @@ def investigate(request: InvestigateRequest):
     try:
         final_state = investigation_graph.invoke(initial_state)
     except Exception as exc:
+        # Avoid returning prompt/provider/network details to the caller.
+        import logging
+        logging.getLogger(__name__).exception("Standalone investigation failed")
         raise HTTPException(
             status_code=500,
-            detail=f"Investigation pipeline failed: {str(exc)}",
+            detail="Investigation pipeline failed.",
         ) from exc
 
     return InvestigateResponse(
@@ -94,4 +98,4 @@ def investigate(request: InvestigateRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("agent_system.main:app", host="0.0.0.0", port=settings.agent_port, reload=True)
+    uvicorn.run("agent_system.main:app", host="127.0.0.1", port=settings.agent_port, reload=False)

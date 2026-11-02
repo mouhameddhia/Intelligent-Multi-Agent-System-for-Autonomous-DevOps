@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from app.connectors.github import (
@@ -8,7 +8,9 @@ from app.connectors.github import (
     GitHubConnector,
 )
 
-router = APIRouter(prefix="/api/github", tags=["GitHub"])
+from app.api.auth import require_user
+
+router = APIRouter(prefix="/api/github", tags=["GitHub"], dependencies=[Depends(require_user)])
 
 
 class GitHubTokenRequest(BaseModel):

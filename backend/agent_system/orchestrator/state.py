@@ -5,6 +5,8 @@ class InvestigationState(TypedDict, total=False):
     """Shared state passed between every agent in the investigation pipeline."""
 
     incident_id: str
+    user_id: str
+    use_personalized_answers: bool
     job_name: str
     build_number: int
 
@@ -25,6 +27,9 @@ class InvestigationState(TypedDict, total=False):
     monitoring_report: str
     diagnosis_report: str
     remediation_report: str
+    # Short read-only source excerpts inspected by Remediation at the exact
+    # build commit; retained so the judge can audit code-specific proposals.
+    remediation_source_evidence: list[dict[str, Any]]
 
     # Agent-provided estimates, 0-100; None means unavailable.
     monitoring_confidence: int | None
@@ -48,6 +53,9 @@ class InvestigationState(TypedDict, total=False):
     # server-side via historical_match.resolve_historical_match(). None if no
     # genuine match. Remediation reads this; it makes no DB/tool call of its own.
     historical_incident: dict[str, Any] | None
+
+    # Audit marker: the advisory policy version actually used for this user.
+    policy_version_used: int | None
     
     # Independent audit of Monitoring/Diagnosis/Remediation against the
     # evidence, produced by a different model family (Qwen vs. the
@@ -64,3 +72,6 @@ class InvestigationState(TypedDict, total=False):
 
     # Set by the apply_fix node after a real commit is pushed (or fails).
     fix_result: dict[str, Any]
+
+    # Exact single-call prompts and outputs used for offline QLoRA training.
+    llm_calls: list[dict[str, Any]]

@@ -14,6 +14,7 @@ from ..data import (
     RUNBOOKS,
     TEAM_CONTACTS,
 )
+from app.connectors.github import GitHubConnectionError, GitHubConnector
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +133,92 @@ def make_remediation_tools() -> list:
     return [get_past_fixes, get_runbook, get_team_contacts]
 
 
+def make_repository_inspection_tool(
+    *,
+    token: str,
+    owner: str,
+    repository: str,
+    commit_sha: str,
+) -> tuple[list, list[dict]]:
+    """Build a read-only GitHub tool pinned to the commit used by this build.
+
+    The second return value is a small audit record populated as files are
+    inspected. No branch, write, commit, or pull-request operation is exposed.
+    """
+    inspected_sources: list[dict] = []
+    if not (token and owner and repository and commit_sha):
+        return [], inspected_sources
+
+    connector = GitHubConnector(token)
+    calls = {"count": 0}
+
+    @tool
+    def inspect_github_file(path: str, symbol: str = "") -> str:
+        """Read one source/test file from the exact GitHub commit under investigation.
+
+        Use a repository-relative path such as `app.py` and, when known, a
+        function or test name to focus the returned excerpt. This tool is
+        read-only, is pinned to the investigated build's SHA, and can be used
+        at most twice to inspect implementation and test evidence.
+        """
+        calls["count"] += 1
+        if calls["count"] > 2:
+            return "Inspection limit reached: at most two source files may be read."
+
+        try:
+            result = connector.get_file_content(
+                owner=owner,
+                repository=repository,
+                path=path,
+                ref=commit_sha,
+            )
+        except (ValueError, GitHubConnectionError) as exc:
+            return f"Source inspection unavailable: {exc}"
+
+        content = result["content"]
+        lines = content.splitlines()
+        symbol = (symbol or "").strip()
+        if symbol:
+            matches = [index for index, line in enumerate(lines) if symbol in line]
+            if matches:
+                first = max(0, matches[0] - 12)
+                last = min(len(lines), matches[0] + 28)
+                excerpt = "\n".join(
+                    f"{line_number + 1}: {lines[line_number]}"
+                    for line_number in range(first, last)
+                )
+            else:
+                excerpt = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines[:40]))
+        else:
+            excerpt = "\n".join(f"{i + 1}: {line}" for i, line in enumerate(lines[:40]))
+
+        was_truncated = len(lines) > 40 or len(excerpt) > 6000
+        excerpt = excerpt[:6000]
+        inspected_sources.append({
+            "path": result["path"],
+            "ref": result["ref"],
+            "blob_sha": result.get("blob_sha"),
+            "source_excerpt": excerpt[:1600],
+            "excerpt_truncated": was_truncated,
+        })
+        return json.dumps({
+            "path": result["path"],
+            "commit_sha": result["ref"],
+            "blob_sha": result.get("blob_sha"),
+            "symbol": symbol or None,
+            "source_excerpt": excerpt,
+            "excerpt_truncated": was_truncated,
+        })
+
+    return [inspect_github_file], inspected_sources
+
+
 # ---------------------------------------------------------------------------
 # Historical retrieval tool — Diagnosis Agent only (Remediation reads the
 # verified result from state; it never calls a tool for history).
 # ---------------------------------------------------------------------------
 
-def make_historical_search_tool(evidence: dict, job_name: str) -> list:
+def make_historical_search_tool(evidence: dict, job_name: str, user_id: str | None = None) -> list:
     """One-shot grounded retrieval for the Diagnosis Agent. Closes over the
     CURRENT build's evidence/job_name so the LLM never supplies query
     parameters itself (nothing to hallucinate there). Enforces a single call
@@ -164,7 +245,7 @@ def make_historical_search_tool(evidence: dict, job_name: str) -> list:
                          "for this investigation. Use the candidates already "
                          "returned; do not call this tool again."
             })
-        candidates = get_candidate_incidents(evidence, job_name, limit=3)
+        candidates = get_candidate_incidents(evidence, job_name, limit=3, user_id=user_id)
         return json.dumps(candidates, default=str)
 
     return [search_similar_incidents]

@@ -1,0 +1,4 @@
+# Optional dependencies for generating/evaluating datasets locally.
+# The Kaggle notebook installs its GPU training stack in its hosted runtime.
+pytest
+kaggle

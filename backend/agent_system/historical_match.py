@@ -12,6 +12,43 @@ from typing import Any
 
 from .agents.evidence_utils import compact_evidence
 
+
+def _bounded_candidate_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Retain concise historical failure and code signals for diagnosis."""
+    evidence = evidence or {}
+    raw_jenkins = evidence.get("jenkins") or {}
+    jenkins = {}
+    if isinstance(raw_jenkins, dict):
+        for key in ("job_name", "build_number", "result", "failed_stage", "url"):
+            if raw_jenkins.get(key) is not None:
+                jenkins[key] = raw_jenkins[key]
+        log = raw_jenkins.get("console_log")
+        if isinstance(log, str) and log:
+            jenkins["console_log"] = log[-1200:]
+
+    result: dict[str, Any] = {"jenkins": jenkins}
+    github = evidence.get("github") or {}
+    if isinstance(github, dict):
+        files = github.get("files") or []
+        summaries = []
+        for item in files[:8]:
+            if not isinstance(item, dict):
+                continue
+            file_summary = {
+                key: item.get(key)
+                for key in ("filename", "status", "additions", "deletions")
+                if item.get(key) is not None
+            }
+            if (
+                len(summaries) == 0
+                and isinstance(item.get("patch"), str)
+                and item.get("patch")
+            ):
+                file_summary["patch"] = item["patch"][:900]
+            summaries.append(file_summary)
+        result["github"] = {"sha": github.get("sha"), "files": summaries}
+    return result
+
 def _norm(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").strip().lower())
 
@@ -90,6 +127,7 @@ def get_candidate_incidents(
     current_evidence: dict[str, Any],
     job_name: str,
     limit: int = 3,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Ranked, deduplicated KNOWN-GOOD candidates for the Diagnosis agent to
     judge semantically. Tier A (exact evidence signature, via the same
@@ -107,7 +145,7 @@ def get_candidate_incidents(
         seen_ids: set[str] = set()
 
         if current_sig is not None:
-            for doc in list_incidents(limit=500):
+            for doc in list_incidents(limit=500, user_id=user_id):
                 if not isinstance(doc, dict) or _signature(doc.get("evidence") or {}) != current_sig:
                     continue
                 summary = _resolution(doc)
@@ -124,20 +162,17 @@ def get_candidate_incidents(
                         "meaning": "Same normalized failed test and assertion; this does not by itself prove the same root cause.",
                     },
                     "resolution_method": summary["resolution_method"],
-                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
-                    "evidence": compact_evidence(
-                        doc.get("evidence") or {},
-                        include_console_log=True,
-                        patch_limit=2000,
-                        file_list_limit=40,
-                    ),
+                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:1200],
+                    "evidence": _bounded_candidate_evidence(doc.get("evidence") or {}),
                 })
                 seen_ids.add(summary["incident_id"])
                 if len(candidates) >= limit:
                     return candidates
 
         if len(candidates) < limit:
-            for doc in find_similar_incidents(job_name, _files_touched(current_evidence), limit=limit):
+            for doc in find_similar_incidents(
+                job_name, _files_touched(current_evidence), limit=limit, user_id=user_id
+            ):
                 summary = _resolution(doc)
                 if summary is None or summary["incident_id"] in seen_ids:
                     continue
@@ -147,13 +182,8 @@ def get_candidate_incidents(
                     "build_number": summary["build_number"],
                     "exact_signature_match": False,
                     "resolution_method": summary["resolution_method"],
-                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:2000],
-                    "evidence": compact_evidence(
-                        doc.get("evidence") or {},
-                        include_console_log=True,
-                        patch_limit=2000,
-                        file_list_limit=40,
-                    ),
+                    "diagnosis_report": (doc.get("diagnosis_report") or "")[:1200],
+                    "evidence": _bounded_candidate_evidence(doc.get("evidence") or {}),
                 })
                 seen_ids.add(summary["incident_id"])
                 if len(candidates) >= limit:
@@ -167,6 +197,7 @@ def get_candidate_incidents(
 def resolve_historical_match(
     incident_id: str | None,
     current_evidence: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Given an incident_id the Diagnosis agent CLAIMS matches, re-fetch the
     FULL record from Mongo and reshape it with _resolution(). This is the only
@@ -183,7 +214,7 @@ def resolve_historical_match(
         return None
     from .db import get_incident  # local: avoid import-time cycles
     try:
-        doc = get_incident(incident_id)
+        doc = get_incident(incident_id, user_id=user_id)
         if not isinstance(doc, dict):
             return None
         resolved = _resolution(doc)
