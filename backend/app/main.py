@@ -3,12 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jenkins import router as jenkins_router
 from app.api.prometheus import router as prometheus_router
+from app.api.incident_stats import router as incident_stats_router
 from app.api.investigation import router as investigation_router
 from app.api.grafana import router as grafana_router
 from app.api.loki import router as loki_router
 from app.api.sonarqube import router as sonarqube_router
 from app.api.kubernetes import router as kubernetes_router
 from app.api.docker import router as docker_router
+from app.api.settings import router as settings_router
+from app.api.chat import router as chat_router
 
 app = FastAPI(
     title="PipeGuard API",
@@ -54,9 +57,14 @@ def health():
 from app.api.github import router as github_router
 app.include_router(github_router)
 app.include_router(prometheus_router)
+# Must come before investigation_router: /api/incidents/{incident_id} is a
+# dynamic path and would otherwise swallow /api/incidents/stats.
+app.include_router(incident_stats_router)
 app.include_router(investigation_router)
 app.include_router(grafana_router)
 app.include_router(loki_router)
 app.include_router(sonarqube_router)
 app.include_router(kubernetes_router)
 app.include_router(docker_router)
+app.include_router(settings_router)
+app.include_router(chat_router)

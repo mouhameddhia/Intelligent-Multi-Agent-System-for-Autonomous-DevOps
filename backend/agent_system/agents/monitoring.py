@@ -6,6 +6,7 @@ from langchain.agents import create_agent
 
 from .evidence_utils import compact_evidence, build_summary_markdown
 from .confidence import extract_agent_confidence, monitoring_evidence_confidence
+from .llm_retry import invoke_with_retry
 from ..config import settings
 from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_monitoring_tools
@@ -88,10 +89,10 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
             f"{json.dumps(compact_evidence(evidence), separators=(',', ':'), default=str)}"
         )
 
-        result = llm.invoke([
+        result = invoke_with_retry(lambda: llm.invoke([
             ("system", GROUNDED_PROMPT),
             ("human", message),
-        ])
+        ]))
 
         raw = result.content
         if not isinstance(raw, str):
@@ -128,7 +129,7 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
         jenkins_api_token=state.get("jenkins_api_token", ""),
     )
     agent = create_agent(model=llm, tools=tools, system_prompt=SYSTEM_PROMPT)
-    result = agent.invoke({
+    result = invoke_with_retry(lambda: agent.invoke({
         "messages": [{
             "role": "user",
             "content": (
@@ -136,7 +137,7 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
                 f"{state['job_name']}, build #{state['build_number']}"
             ),
         }]
-    })
+    }))
 
     report, confidence = extract_agent_confidence(result["messages"][-1].content)
     return {

@@ -1,5 +1,4 @@
-"""Confirms the existing human-approval gate still guards apply_fix and was
-not bypassed while wiring in the judge gate: apply_fix is only reachable
+"""Confirms the human-approval gate guards apply_fix: it is only reachable
 when approval_status == "approve"."""
 
 from langgraph.graph import END

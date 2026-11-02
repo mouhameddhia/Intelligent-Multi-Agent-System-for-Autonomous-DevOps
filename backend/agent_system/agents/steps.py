@@ -21,6 +21,7 @@ from langchain_groq import ChatGroq
 
 from ..config import settings
 from ..orchestrator.state import InvestigationState
+from .llm_retry import invoke_with_retry
 
 MAX_STEPS = 8
 
@@ -138,7 +139,7 @@ def _llm_steps(report: str) -> list[str]:
         max_tokens=700,
         model_kwargs={"include_reasoning": False},
     )
-    result = llm.invoke([
+    result = invoke_with_retry(lambda: llm.invoke([
         (
             "system",
             "Extract the remediation steps from the report as a JSON array of "
@@ -146,7 +147,7 @@ def _llm_steps(report: str) -> list[str]:
             "add, merge or invent steps. Return only the JSON array.",
         ),
         ("human", report),
-    ])
+    ]))
     content = (result.content or "").strip()
     start, end = content.find("["), content.rfind("]")
     if start == -1 or end <= start:

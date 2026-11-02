@@ -2947,7 +2947,6 @@ button:disabled {
 .decision-denied { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); }
 .decision-error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); }
 
-
 /* Fix applied + feedback modal */
 .feedback-modal-backdrop {
   z-index: 40;

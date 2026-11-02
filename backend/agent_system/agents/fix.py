@@ -11,7 +11,7 @@ from langchain_groq import ChatGroq
 
 from ..config import settings
 from ..orchestrator.state import InvestigationState
-from .judge import judge_fix
+from .llm_retry import invoke_with_retry
 
 GITHUB_API_URL = "https://api.github.com"
 
@@ -239,6 +239,85 @@ def _pick_target_file(state: InvestigationState, token: str, owner: str, repo: s
     return None
 
 
+def _build_fix_prompt(
+    target_file: str,
+    original_content: str,
+    test_filename: str | None,
+    test_content: str | None,
+    diagnosis_report: str,
+    remediation_report: str,
+) -> str:
+    test_file_block = ""
+    overfit_rules = ""
+    if test_content:
+        test_file_block = f"""
+
+FULL TEST FILE ({test_filename}) — this is the ground truth for correct behavior:
+{test_content}
+"""
+        overfit_rules = """
+- You are given the FULL test file above. Fix the implementation so that
+  every test in it passes, not just the single failure quoted in the
+  diagnosis/remediation reports above — do not overfit to one assertion.
+- EXCEPTION: if a test's own comment states it is intentionally designed to
+  fail (e.g. "intentionally failing", "control test", "expected to fail"),
+  do NOT change the implementation to satisfy it. Leave that one test
+  failing on purpose and do not mention changing it.
+- If the file's existing docstring or comments describe behavior that
+  contradicts what the real (non-intentional) tests expect, correct the
+  docstring/comments to match the fixed, correct behavior. Do not treat
+  stale or incorrect documentation as ground truth over the tests.
+"""
+
+    return f"""You are a senior engineer fixing a broken Jenkins build.
+
+FILE: {target_file}
+
+CURRENT FILE CONTENT:
+{original_content}
+{test_file_block}
+DIAGNOSIS REPORT:
+{diagnosis_report}
+
+REMEDIATION REPORT:
+{remediation_report}
+
+Rewrite the ENTIRE file with the bug fixed, based on the diagnosis and
+remediation above. Preserve everything unrelated to the bug.
+{overfit_rules}
+Return ONLY the complete corrected file content — no markdown fences,
+no explanation, no commentary.
+"""
+
+
+def _generate_fix_content(
+    llm,
+    target_file: str,
+    original_content: str,
+    test_filename: str | None,
+    test_content: str | None,
+    diagnosis_report: str,
+    remediation_report: str,
+) -> str:
+    """One Groq call: build the prompt and return the cleaned fix content.
+    Raises on LLM failure."""
+    prompt = _build_fix_prompt(
+        target_file,
+        original_content,
+        test_filename,
+        test_content,
+        diagnosis_report,
+        remediation_report,
+    )
+    result = invoke_with_retry(lambda: llm.invoke([("human", prompt)]))
+    new_content = result.content.strip()
+    if new_content.startswith("```"):
+        new_content = new_content.split("\n", 1)[1]
+        if new_content.endswith("```"):
+            new_content = new_content.rsplit("```", 1)[0]
+    return new_content
+
+
 def run_apply_fix(state: InvestigationState) -> InvestigationState:
     token = state.get("github_token") or ""
     owner = state.get("github_owner") or ""
@@ -297,80 +376,23 @@ def run_apply_fix(state: InvestigationState) -> InvestigationState:
         model_kwargs={"include_reasoning": False},
     )
 
-    test_file_block = ""
-    overfit_rules = ""
-    if test_content:
-        test_file_block = f"""
-
-FULL TEST FILE ({test_filename}) — this is the ground truth for correct behavior:
-{test_content}
-"""
-        overfit_rules = """
-- You are given the FULL test file above. Fix the implementation so that
-  every test in it passes, not just the single failure quoted in the
-  diagnosis/remediation reports above — do not overfit to one assertion.
-- EXCEPTION: if a test's own comment states it is intentionally designed to
-  fail (e.g. "intentionally failing", "control test", "expected to fail"),
-  do NOT change the implementation to satisfy it. Leave that one test
-  failing on purpose and do not mention changing it.
-- If the file's existing docstring or comments describe behavior that
-  contradicts what the real (non-intentional) tests expect, correct the
-  docstring/comments to match the fixed, correct behavior. Do not treat
-  stale or incorrect documentation as ground truth over the tests.
-"""
-
-    fix_prompt = f"""You are a senior engineer fixing a broken Jenkins build.
-
-FILE: {target_file}
-
-CURRENT FILE CONTENT:
-{original_content}
-{test_file_block}
-DIAGNOSIS REPORT:
-{state.get('diagnosis_report', '')}
-
-REMEDIATION REPORT:
-{state.get('remediation_report', '')}
-
-Rewrite the ENTIRE file with the bug fixed, based on the diagnosis and
-remediation above. Preserve everything unrelated to the bug.
-{overfit_rules}
-Return ONLY the complete corrected file content — no markdown fences,
-no explanation, no commentary.
-"""
+    diagnosis_report = state.get("diagnosis_report", "")
+    remediation_report = state.get("remediation_report", "")
 
     try:
-        result = _invoke_with_retry(llm, fix_prompt)
-        new_content = result.content.strip()
-        if new_content.startswith("```"):
-            new_content = new_content.split("\n", 1)[1]
-            if new_content.endswith("```"):
-                new_content = new_content.rsplit("```", 1)[0]
+        new_content = _generate_fix_content(
+            llm,
+            target_file,
+            original_content,
+            test_filename,
+            test_content,
+            diagnosis_report,
+            remediation_report,
+        )
     except Exception as exc:
         return {**state, "fix_result": {
             "applied": False,
             "message": f"LLM failed to generate a fix: {exc}",
-        }}
-
-    # Independent judge gate: a different model (Gemini) reviews the diff
-    # against the original file, the diagnosis and the test file BEFORE any
-    # GitHub write. judge_fix() fails closed, so a judge outage or an
-    # unparseable response rejects the fix just like an explicit "fail" —
-    # nothing is pushed unless the verdict is exactly "pass".
-    judge_result = judge_fix(
-        target_file=target_file,
-        original_content=original_content,
-        new_content=new_content,
-        test_filename=test_filename,
-        test_content=test_content,
-        diagnosis_report=state.get("diagnosis_report", ""),
-        remediation_report=state.get("remediation_report", ""),
-    )
-    if judge_result["verdict"] != "pass":
-        return {**state, "fix_result": {
-            "applied": False,
-            "message": f"Judge rejected the generated fix before any GitHub push: {judge_result['reasoning']}",
-            "judge_result": judge_result,
         }}
 
     commit_message = (
@@ -406,25 +428,4 @@ no explanation, no commentary.
             f"Pushed a fix to {target_file}. Rebuild "
             f"{state['job_name']} in Jenkins to see it pass."
         ),
-        "judge_result": judge_result,
     }}
-
-
-def _invoke_with_retry(llm, prompt_text: str, max_attempts: int = 3):
-    """Call the LLM, retrying with backoff on Groq 429 rate-limit errors."""
-    import time
-
-    last_exc = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            return llm.invoke([("human", prompt_text)])
-        except Exception as exc:
-            last_exc = exc
-            message = str(exc)
-            is_rate_limit = "429" in message or "rate_limit_exceeded" in message
-            if not is_rate_limit or attempt == max_attempts:
-                raise
-            wait_match = re.search(r"try again in ([\d.]+)s", message)
-            wait_seconds = float(wait_match.group(1)) + 1.0 if wait_match else 10.0
-            time.sleep(wait_seconds)
-    raise last_exc

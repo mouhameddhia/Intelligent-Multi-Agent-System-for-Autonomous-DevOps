@@ -2,9 +2,15 @@ import { useCallback, useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { extractSection } from './reportSections'
+// TOOL INTEGRATION — Incidents dashboard: standalone component, see
+// src/IncidentsDashboard.jsx for integration notes (self-contained, drop-in).
+import IncidentsDashboard from './IncidentsDashboard'
+// TOOL INTEGRATION — Incident Advisor chatbot: standalone component, see
+// src/IncidentChatbot.jsx for integration notes (self-contained, drop-in).
+import IncidentChatbot from './IncidentChatbot'
 import './App.css'
 
-const API_URL = 'http://127.0.0.1:8000';
+const API_URL = 'http://127.0.0.1:8070';
 const AGENT_API_URL = API_URL;
 
 const initialIntegrations = [
@@ -914,7 +920,7 @@ try {
         ...current,
         isDeciding: false,
         decisionMessage: error instanceof TypeError
-          ? 'Cannot reach the PipeGuard backend. Check that it is running on port 8000.'
+          ? 'Cannot reach the PipeGuard backend. Check that it is running on port 8070.'
           : (error.message || 'Could not submit the decision.'),
       } : current))
     }
@@ -995,366 +1001,335 @@ try {
     setFormValues(defaultFormValues[integration.id] || {})
   }
 
-  async function saveConfiguration(event) {
-    event.preventDefault()
+  async function connectKubernetes(url, token, verifyTls) {
+    setIsConnecting(true)
+    setKubernetesConnectionStatus('connecting')
+    setKubernetesConnectionMessage('Testing the Kubernetes API server and loading namespaces...')
 
-    if (selectedIntegration === 'kubernetes') {
-      const url = (formValues.url || '').trim()
-      const token = (formValues.token || '').trim()
-      const verifyTls = formValues.verify_tls ?? true
+    try {
+      const testResponse = await fetch(`${API_URL}/api/kubernetes/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, token, verify_tls: verifyTls }),
+      })
+      const testData = await testResponse.json()
 
-      setIsConnecting(true)
-      setKubernetesConnectionStatus('connecting')
-      setKubernetesConnectionMessage('Testing the Kubernetes API server and loading namespaces...')
-
-      try {
-        const testResponse = await fetch(`${API_URL}/api/kubernetes/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, token, verify_tls: verifyTls }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `Kubernetes connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const namespacesResponse = await fetch(`${API_URL}/api/kubernetes/namespaces`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, token, verify_tls: verifyTls }),
-        })
-        const namespacesData = await namespacesResponse.json()
-
-        if (!namespacesResponse.ok) {
-          throw new Error(namespacesData.detail || `Could not load Kubernetes namespaces (HTTP ${namespacesResponse.status})`)
-        }
-
-        const namespaces = namespacesData.namespaces || []
-        setKubernetesUrl(url)
-        setKubernetesToken(token)
-        setKubernetesVerifyTls(verifyTls)
-        setKubernetesNamespaces(namespaces)
-        setSelectedKubernetesNamespace(namespaces[0]?.name || '')
-        setKubernetesSummary(testData)
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'kubernetes'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setKubernetesConnectionStatus('connected')
-        setKubernetesConnectionMessage(
-          `Connected to Kubernetes ${testData.git_version || ''}. ${namespaces.length} namespaces retrieved.`,
-        )
-        setSelectedIntegration(null)
-      } catch (error) {
-        setKubernetesConnectionStatus('disconnected')
-        setKubernetesConnectionMessage(error.message || 'Could not connect to the Kubernetes API server.')
-      } finally {
-        setIsConnecting(false)
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `Kubernetes connection failed (HTTP ${testResponse.status})`)
       }
-      return
-    }
 
-    if (selectedIntegration === 'loki') {
-      const url = (formValues.url || '').trim()
+      const namespacesResponse = await fetch(`${API_URL}/api/kubernetes/namespaces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, token, verify_tls: verifyTls }),
+      })
+      const namespacesData = await namespacesResponse.json()
 
-      setIsConnecting(true)
-      setLokiConnectionStatus('connecting')
-      setLokiConnectionMessage('Testing Loki and loading labels...')
-
-      try {
-        const testResponse = await fetch(`${API_URL}/api/loki/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `Loki connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const labelsResponse = await fetch(`${API_URL}/api/loki/labels`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-        const labelsData = await labelsResponse.json()
-
-        if (!labelsResponse.ok) {
-          throw new Error(labelsData.detail || `Could not load Loki labels (HTTP ${labelsResponse.status})`)
-        }
-
-        const labels = labelsData.labels || []
-        setLokiUrl(url)
-        setLokiLabels(labels)
-        setLokiSummary(testData)
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'loki'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setLokiConnectionStatus('connected')
-        setLokiConnectionMessage(
-          `Connected to Loki. ${labels.length} labels retrieved.`,
-        )
-        setSelectedIntegration(null)
-      } catch (error) {
-        setLokiConnectionStatus('disconnected')
-        setLokiConnectionMessage(error.message || 'Could not connect to Loki.')
-      } finally {
-        setIsConnecting(false)
+      if (!namespacesResponse.ok) {
+        throw new Error(namespacesData.detail || `Could not load Kubernetes namespaces (HTTP ${namespacesResponse.status})`)
       }
-      return
+
+      const namespaces = namespacesData.namespaces || []
+      setKubernetesUrl(url)
+      setKubernetesToken(token)
+      setKubernetesVerifyTls(verifyTls)
+      setKubernetesNamespaces(namespaces)
+      setSelectedKubernetesNamespace(namespaces[0]?.name || '')
+      setKubernetesSummary(testData)
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'kubernetes'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setKubernetesConnectionStatus('connected')
+      setKubernetesConnectionMessage(
+        `Connected to Kubernetes ${testData.git_version || ''}. ${namespaces.length} namespaces retrieved.`,
+      )
+      setSelectedIntegration(null)
+    } catch (error) {
+      setKubernetesConnectionStatus('disconnected')
+      setKubernetesConnectionMessage(error.message || 'Could not connect to the Kubernetes API server.')
+    } finally {
+      setIsConnecting(false)
     }
+  }
 
-    if (selectedIntegration === 'sonarqube') {
-      const url = (formValues.url || '').trim()
-      const token = (formValues.token || '').trim()
+  async function connectLoki(url) {
+    setIsConnecting(true)
+    setLokiConnectionStatus('connecting')
+    setLokiConnectionMessage('Testing Loki and loading labels...')
 
-      setIsConnecting(true)
-      setSonarqubeConnectionStatus('connecting')
-      setSonarqubeConnectionMessage('Testing SonarQube and loading projects...')
+    try {
+      const testResponse = await fetch(`${API_URL}/api/loki/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const testData = await testResponse.json()
 
-      try {
-        const testResponse = await fetch(`${API_URL}/api/sonarqube/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, token }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `SonarQube connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const projectsResponse = await fetch(`${API_URL}/api/sonarqube/projects`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, token }),
-        })
-        const projectsData = await projectsResponse.json()
-
-        if (!projectsResponse.ok) {
-          throw new Error(projectsData.detail || `Could not load SonarQube projects (HTTP ${projectsResponse.status})`)
-        }
-
-        const projects = projectsData.projects || []
-        setSonarqubeUrl(url)
-        setSonarqubeToken(token)
-        setSonarqubeProjects(projects)
-        setSelectedSonarqubeProject(projects[0]?.key || '')
-        setSonarqubeSummary(testData)
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'sonarqube'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setSonarqubeConnectionStatus('connected')
-        setSonarqubeConnectionMessage(
-          `Connected to SonarQube ${testData.version || ''}. ${projects.length} projects retrieved.`,
-        )
-        setSelectedIntegration(null)
-      } catch (error) {
-        setSonarqubeConnectionStatus('disconnected')
-        setSonarqubeConnectionMessage(error.message || 'Could not connect to SonarQube.')
-      } finally {
-        setIsConnecting(false)
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `Loki connection failed (HTTP ${testResponse.status})`)
       }
-      return
-    }
 
-    if (selectedIntegration === 'grafana') {
-      const url = (formValues.url || '').trim()
-      const token = (formValues.token || '').trim()
+      const labelsResponse = await fetch(`${API_URL}/api/loki/labels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const labelsData = await labelsResponse.json()
 
-      setIsConnecting(true)
-      setGrafanaConnectionStatus('connecting')
-      setGrafanaConnectionMessage('Testing Grafana and loading dashboards...')
-
-      try {
-        const testResponse = await fetch(`${API_URL}/api/grafana/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, api_token: token }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `Grafana connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const dashboardsResponse = await fetch(`${API_URL}/api/grafana/dashboards`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, api_token: token }),
-        })
-        const dashboardsData = await dashboardsResponse.json()
-
-        if (!dashboardsResponse.ok) {
-          throw new Error(dashboardsData.detail || `Could not load Grafana dashboards (HTTP ${dashboardsResponse.status})`)
-        }
-
-        const dashboards = dashboardsData.dashboards || []
-        setGrafanaUrl(url)
-        setGrafanaToken(token)
-        setGrafanaDashboards(dashboards)
-        setGrafanaSummary(testData)
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'grafana'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setGrafanaConnectionStatus('connected')
-        setGrafanaConnectionMessage(
-          `Connected to Grafana ${testData.version || ''}. ${dashboards.length} dashboards retrieved.`,
-        )
-        setSelectedIntegration(null)
-      } catch (error) {
-        setGrafanaConnectionStatus('disconnected')
-        setGrafanaConnectionMessage(error.message || 'Could not connect to Grafana.')
-      } finally {
-        setIsConnecting(false)
+      if (!labelsResponse.ok) {
+        throw new Error(labelsData.detail || `Could not load Loki labels (HTTP ${labelsResponse.status})`)
       }
-      return
+
+      const labels = labelsData.labels || []
+      setLokiUrl(url)
+      setLokiLabels(labels)
+      setLokiSummary(testData)
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'loki'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setLokiConnectionStatus('connected')
+      setLokiConnectionMessage(
+        `Connected to Loki. ${labels.length} labels retrieved.`,
+      )
+      setSelectedIntegration(null)
+    } catch (error) {
+      setLokiConnectionStatus('disconnected')
+      setLokiConnectionMessage(error.message || 'Could not connect to Loki.')
+    } finally {
+      setIsConnecting(false)
     }
+  }
 
-    if (selectedIntegration === 'prometheus') {
-      const url = (formValues.url || '').trim()
+  async function connectSonarqube(url, token) {
+    setIsConnecting(true)
+    setSonarqubeConnectionStatus('connecting')
+    setSonarqubeConnectionMessage('Testing SonarQube and loading projects...')
 
-      setIsConnecting(true)
-      setPrometheusConnectionStatus('connecting')
-      setPrometheusConnectionMessage('Testing Prometheus and retrieving active targets...')
+    try {
+      const testResponse = await fetch(`${API_URL}/api/sonarqube/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, token }),
+      })
+      const testData = await testResponse.json()
 
-      try {
-        const testResponse = await fetch(`${API_URL}/api/prometheus/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `Prometheus connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const targetsResponse = await fetch(`${API_URL}/api/prometheus/targets`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-        const targetsData = await targetsResponse.json()
-
-        if (!targetsResponse.ok) {
-          throw new Error(targetsData.detail || `Could not retrieve Prometheus targets (HTTP ${targetsResponse.status})`)
-        }
-
-        const targets = targetsData.targets || []
-        setPrometheusUrl(url)
-        setPrometheusTargets(targets)
-        setPrometheusSummary(testData)
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'prometheus'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setPrometheusConnectionStatus('connected')
-        setPrometheusConnectionMessage(
-          `Connected to Prometheus ${testData.version}. ${testData.targets_healthy} of ${testData.targets_total} targets healthy; ${targets.length} active targets retrieved.`,
-        )
-      } catch (error) {
-        setPrometheusConnectionStatus('disconnected')
-        setPrometheusConnectionMessage(error.message || 'Could not connect to Prometheus.')
-      } finally {
-        setIsConnecting(false)
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `SonarQube connection failed (HTTP ${testResponse.status})`)
       }
-      return
-    }
 
-    if (selectedIntegration === 'github') {
-      const token = (formValues.token || '').trim()
+      const projectsResponse = await fetch(`${API_URL}/api/sonarqube/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, token }),
+      })
+      const projectsData = await projectsResponse.json()
 
-      setIsConnecting(true)
-      setGithubConnectionStatus('connecting')
-      setGithubConnectionMessage('Testing GitHub and loading repositories...')
-      setGithubDataError('')
-
-      try {
-        const testResponse = await fetch(`${API_URL}/api/github/test`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
-        })
-        const testData = await testResponse.json()
-
-        if (!testResponse.ok) {
-          throw new Error(testData.detail || `GitHub connection failed (HTTP ${testResponse.status})`)
-        }
-
-        const repoResponse = await fetch(`${API_URL}/api/github/repositories`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
-        })
-        const repoData = await repoResponse.json()
-
-        if (!repoResponse.ok) {
-          throw new Error(repoData.detail || `Could not load repositories (HTTP ${repoResponse.status})`)
-        }
-
-        const repositories = repoData.repositories || []
-        setGithubToken(token)
-        setGithubRepositories(repositories)
-        setSelectedGithubRepo(repositories[0]?.full_name || '')
-        setIntegrations((previous) =>
-          previous.map((integration) =>
-            integration.id === 'github'
-              ? { ...integration, connected: true }
-              : integration,
-          ),
-        )
-        setGithubConnectionStatus('connected')
-        setGithubConnectionMessage(
-          `Connected as ${testData.username}. Loaded ${repositories.length} repositories.`,
-        )
-
-        if (repositories[0]?.full_name) {
-          await fetchGitHubCommits(token, repositories[0].full_name)
-        } else {
-          setGithubCommits([])
-        }
-
-        setSelectedIntegration(null)
-      } catch (error) {
-        setGithubConnectionStatus('disconnected')
-        setGithubConnectionMessage(
-          error.message || 'Could not connect to GitHub.',
-        )
-      } finally {
-        setIsConnecting(false)
+      if (!projectsResponse.ok) {
+        throw new Error(projectsData.detail || `Could not load SonarQube projects (HTTP ${projectsResponse.status})`)
       }
-      return
+
+      const projects = projectsData.projects || []
+      setSonarqubeUrl(url)
+      setSonarqubeToken(token)
+      setSonarqubeProjects(projects)
+      setSelectedSonarqubeProject(projects[0]?.key || '')
+      setSonarqubeSummary(testData)
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'sonarqube'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setSonarqubeConnectionStatus('connected')
+      setSonarqubeConnectionMessage(
+        `Connected to SonarQube ${testData.version || ''}. ${projects.length} projects retrieved.`,
+      )
+      setSelectedIntegration(null)
+    } catch (error) {
+      setSonarqubeConnectionStatus('disconnected')
+      setSonarqubeConnectionMessage(error.message || 'Could not connect to SonarQube.')
+    } finally {
+      setIsConnecting(false)
     }
+  }
 
-    if (selectedIntegration !== 'jenkins') return
+  async function connectGrafana(url, token) {
+    setIsConnecting(true)
+    setGrafanaConnectionStatus('connecting')
+    setGrafanaConnectionMessage('Testing Grafana and loading dashboards...')
 
-    const credentials = {
-      url: formValues.url.trim(),
-      username: formValues.username.trim(),
-      api_token: formValues.token,
+    try {
+      const testResponse = await fetch(`${API_URL}/api/grafana/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, api_token: token }),
+      })
+      const testData = await testResponse.json()
+
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `Grafana connection failed (HTTP ${testResponse.status})`)
+      }
+
+      const dashboardsResponse = await fetch(`${API_URL}/api/grafana/dashboards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, api_token: token }),
+      })
+      const dashboardsData = await dashboardsResponse.json()
+
+      if (!dashboardsResponse.ok) {
+        throw new Error(dashboardsData.detail || `Could not load Grafana dashboards (HTTP ${dashboardsResponse.status})`)
+      }
+
+      const dashboards = dashboardsData.dashboards || []
+      setGrafanaUrl(url)
+      setGrafanaToken(token)
+      setGrafanaDashboards(dashboards)
+      setGrafanaSummary(testData)
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'grafana'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setGrafanaConnectionStatus('connected')
+      setGrafanaConnectionMessage(
+        `Connected to Grafana ${testData.version || ''}. ${dashboards.length} dashboards retrieved.`,
+      )
+      setSelectedIntegration(null)
+    } catch (error) {
+      setGrafanaConnectionStatus('disconnected')
+      setGrafanaConnectionMessage(error.message || 'Could not connect to Grafana.')
+    } finally {
+      setIsConnecting(false)
     }
+  }
 
+  async function connectPrometheus(url) {
+    setIsConnecting(true)
+    setPrometheusConnectionStatus('connecting')
+    setPrometheusConnectionMessage('Testing Prometheus and retrieving active targets...')
+
+    try {
+      const testResponse = await fetch(`${API_URL}/api/prometheus/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const testData = await testResponse.json()
+
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `Prometheus connection failed (HTTP ${testResponse.status})`)
+      }
+
+      const targetsResponse = await fetch(`${API_URL}/api/prometheus/targets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      })
+      const targetsData = await targetsResponse.json()
+
+      if (!targetsResponse.ok) {
+        throw new Error(targetsData.detail || `Could not retrieve Prometheus targets (HTTP ${targetsResponse.status})`)
+      }
+
+      const targets = targetsData.targets || []
+      setPrometheusUrl(url)
+      setPrometheusTargets(targets)
+      setPrometheusSummary(testData)
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'prometheus'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setPrometheusConnectionStatus('connected')
+      setPrometheusConnectionMessage(
+        `Connected to Prometheus ${testData.version}. ${testData.targets_healthy} of ${testData.targets_total} targets healthy; ${targets.length} active targets retrieved.`,
+      )
+      setSelectedIntegration(null)
+    } catch (error) {
+      setPrometheusConnectionStatus('disconnected')
+      setPrometheusConnectionMessage(error.message || 'Could not connect to Prometheus.')
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  async function connectGithub(token) {
+    setIsConnecting(true)
+    setGithubConnectionStatus('connecting')
+    setGithubConnectionMessage('Testing GitHub and loading repositories...')
+    setGithubDataError('')
+
+    try {
+      const testResponse = await fetch(`${API_URL}/api/github/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      const testData = await testResponse.json()
+
+      if (!testResponse.ok) {
+        throw new Error(testData.detail || `GitHub connection failed (HTTP ${testResponse.status})`)
+      }
+
+      const repoResponse = await fetch(`${API_URL}/api/github/repositories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      const repoData = await repoResponse.json()
+
+      if (!repoResponse.ok) {
+        throw new Error(repoData.detail || `Could not load repositories (HTTP ${repoResponse.status})`)
+      }
+
+      const repositories = repoData.repositories || []
+      setGithubToken(token)
+      setGithubRepositories(repositories)
+      setSelectedGithubRepo(repositories[0]?.full_name || '')
+      setIntegrations((previous) =>
+        previous.map((integration) =>
+          integration.id === 'github'
+            ? { ...integration, connected: true }
+            : integration,
+        ),
+      )
+      setGithubConnectionStatus('connected')
+      setGithubConnectionMessage(
+        `Connected as ${testData.username}. Loaded ${repositories.length} repositories.`,
+      )
+
+      if (repositories[0]?.full_name) {
+        await fetchGitHubCommits(token, repositories[0].full_name)
+      } else {
+        setGithubCommits([])
+      }
+
+      setSelectedIntegration(null)
+    } catch (error) {
+      setGithubConnectionStatus('disconnected')
+      setGithubConnectionMessage(
+        error.message || 'Could not connect to GitHub.',
+      )
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  async function connectJenkins(credentials) {
     setIsConnecting(true)
     setConnectionStatus('connecting')
     setConnectionMessage('Testing the Jenkins connection...')
@@ -1394,6 +1369,89 @@ try {
     } finally {
       setIsConnecting(false)
     }
+  }
+
+  // Auto-connect every tool that has a default configured server-side
+  // (.env), once, right after the page loads — so the engineer doesn't have
+  // to re-enter the same credentials in Settings every session.
+  useEffect(() => {
+    async function autoConnectFromDefaults() {
+      let defaults
+      try {
+        const response = await fetch(`${API_URL}/api/settings/defaults`)
+        if (!response.ok) return
+        defaults = await response.json()
+      } catch {
+        return
+      }
+
+      const jobs = []
+      if (defaults.jenkins?.url && defaults.jenkins?.username && defaults.jenkins?.api_token) {
+        jobs.push(connectJenkins({
+          url: defaults.jenkins.url,
+          username: defaults.jenkins.username,
+          api_token: defaults.jenkins.api_token,
+        }))
+      }
+      if (defaults.github?.token) jobs.push(connectGithub(defaults.github.token))
+      if (defaults.prometheus?.url) jobs.push(connectPrometheus(defaults.prometheus.url))
+      if (defaults.grafana?.url && defaults.grafana?.token) {
+        jobs.push(connectGrafana(defaults.grafana.url, defaults.grafana.token))
+      }
+      if (defaults.loki?.url) jobs.push(connectLoki(defaults.loki.url))
+      if (defaults.sonarqube?.url && defaults.sonarqube?.token) {
+        jobs.push(connectSonarqube(defaults.sonarqube.url, defaults.sonarqube.token))
+      }
+      if (defaults.kubernetes?.url && defaults.kubernetes?.token) {
+        jobs.push(connectKubernetes(defaults.kubernetes.url, defaults.kubernetes.token, defaults.kubernetes.verify_tls ?? true))
+      }
+
+      await Promise.all(jobs)
+    }
+
+    autoConnectFromDefaults()
+    // Runs once on mount only — each connect* function reads current state via setters, not via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function saveConfiguration(event) {
+    event.preventDefault()
+
+    if (selectedIntegration === 'kubernetes') {
+      return connectKubernetes(
+        (formValues.url || '').trim(),
+        (formValues.token || '').trim(),
+        formValues.verify_tls ?? true,
+      )
+    }
+
+    if (selectedIntegration === 'loki') {
+      return connectLoki((formValues.url || '').trim())
+    }
+
+    if (selectedIntegration === 'sonarqube') {
+      return connectSonarqube((formValues.url || '').trim(), (formValues.token || '').trim())
+    }
+
+    if (selectedIntegration === 'grafana') {
+      return connectGrafana((formValues.url || '').trim(), (formValues.token || '').trim())
+    }
+
+    if (selectedIntegration === 'prometheus') {
+      return connectPrometheus((formValues.url || '').trim())
+    }
+
+    if (selectedIntegration === 'github') {
+      return connectGithub((formValues.token || '').trim())
+    }
+
+    if (selectedIntegration !== 'jenkins') return
+
+    return connectJenkins({
+      url: formValues.url.trim(),
+      username: formValues.username.trim(),
+      api_token: formValues.token,
+    })
   }
 
   async function fetchGitHubCommits(token, fullName) {
@@ -2171,19 +2229,12 @@ try {
           )}
 
           {activePage === 'incidents' && (
-            <section className="placeholder-page">
-              <div className="placeholder-icon">◈</div>
-              <h1>Incidents</h1>
-              <p>
-                {failedJobs > 0
-                  ? `${failedJobs} job(s) currently report a failed latest build. Incident detection and diagnosis are not implemented yet.`
-                  : 'No incident records have been created. Detecting failures and running agent investigations is the next milestone.'}
-              </p>
-              <p className="data-caption">A failed build is a signal, not yet a confirmed incident or root cause.</p>
-            </section>
+            <IncidentsDashboard apiUrl={API_URL} />
           )}
         </div>
       </main>
+
+      <IncidentChatbot apiUrl={API_URL} />
 
       {investigation && !isInvestigationModalOpen && (
         <button
@@ -3223,7 +3274,22 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
                     </>
                   ) : (
                     <>
-                      <strong>Could not apply the fix.</strong> {investigation.decisionMessage}
+                      <strong>Could not apply the fix.</strong>{' '}
+                      {investigation.decisionMessage}
+                      <p>
+                        No automated change was made — fix it manually using the
+                        remediation steps above, then log how you resolved it so
+                        PipeGuard can learn from it next time.
+                      </p>
+                      {investigation.feedbackSaved ? (
+                        <div className="decision-feedback-saved">✓ Resolution saved. Thank you.</div>
+                      ) : (
+                        <div>
+                          <button className="secondary-button feedback-reopen-button" onClick={onOpenFeedback}>
+                            Report how you resolved it
+                          </button>
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -3239,6 +3305,7 @@ function BuildInvestigation({ investigation, isLoading, activeStage, onStageChan
 
 function FixFeedbackModal({ investigation, onClose, onSubmit }) {
   const isManual = investigation.decisionStatus === 'denied'
+    || (investigation.decisionStatus === 'approved_fixed' && !investigation.fixResult?.applied)
   const steps = investigation.steps || []
   const [buildPassed, setBuildPassed] = useState(false)
   const [likedFix, setLikedFix] = useState(false)

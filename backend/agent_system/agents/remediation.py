@@ -8,6 +8,7 @@ from ..orchestrator.state import InvestigationState
 from ..tools.build_tools import make_remediation_tools
 from .steps import STEP_DELIMITER_START, STEP_DELIMITER_END, split_report_and_steps_json, build_step_dicts
 from .confidence import extract_agent_confidence
+from .llm_retry import invoke_with_retry
 
 SYSTEM_PROMPT = """\
 You are a Remediation Agent in a DevOps investigation pipeline.
@@ -122,10 +123,10 @@ Rules:
             f"DIAGNOSIS REPORT:\n{state['diagnosis_report']}"
             f"{_historical_context_block(state.get('historical_incident'))}"
         )
-        result = llm.invoke([
+        result = invoke_with_retry(lambda: llm.invoke([
             ("system", grounded_prompt),
             ("human", message),
-        ])
+        ]))
         raw_output = result.content
 
         report_text, step_texts = split_report_and_steps_json(raw_output)
@@ -140,10 +141,10 @@ Rules:
         f"Diagnosis Report:\n{state['diagnosis_report']}\n\n"
         f"Recommend safe remediation for current Jenkins job: {state['job_name']}, build #{state['build_number']}. Use only current reports."
     )
-    result = llm.invoke([
+    result = invoke_with_retry(lambda: llm.invoke([
         ("system", SYSTEM_PROMPT + "\nDo not access historical incidents or memory."),
         ("human", message),
-    ])
+    ]))
     report = result.content
 
     report, confidence = extract_agent_confidence(report)

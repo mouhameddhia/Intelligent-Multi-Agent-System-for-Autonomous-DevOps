@@ -5,6 +5,7 @@ from langchain.agents import create_agent
 
 from .evidence_utils import compact_evidence
 from .confidence import extract_agent_confidence, extract_historical_match_id
+from .llm_retry import invoke_with_retry
 from ..config import settings
 from ..orchestrator.state import InvestigationState
 from ..historical_match import resolve_historical_match
@@ -87,7 +88,7 @@ FORMAT RULES:
         )
         tools = make_historical_search_tool(evidence, state["job_name"])
         agent = create_agent(model=llm, tools=tools, system_prompt=grounded_prompt)
-        agent_result = agent.invoke({"messages": [{"role": "user", "content": message}]})
+        agent_result = invoke_with_retry(lambda: agent.invoke({"messages": [{"role": "user", "content": message}]}))
         report = agent_result["messages"][-1].content
         if not isinstance(report, str):
             raise TypeError(f"Expected string from diagnosis agent, got {type(report).__name__}")
@@ -97,10 +98,10 @@ FORMAT RULES:
             f"Monitoring Report:\n{state['monitoring_report']}\n\n"
             f"Diagnose the current failure for Jenkins job: {state['job_name']}, build #{state['build_number']}. Use only current supplied evidence."
         )
-        result = llm.invoke([
+        result = invoke_with_retry(lambda: llm.invoke([
             ("system", SYSTEM_PROMPT + "\nDo not access historical incidents or memory."),
             ("human", message),
-        ])
+        ]))
         report = result.content
 
     report, match_id = extract_historical_match_id(report)
