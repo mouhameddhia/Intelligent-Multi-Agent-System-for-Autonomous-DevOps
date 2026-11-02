@@ -81,6 +81,9 @@ def build_monitoring_messages(state: InvestigationState) -> list[tuple[str, str]
     return [("system", GROUNDED_PROMPT), ("human", message)]
 
 
+MAX_TOKENS = 4000
+
+
 def run_monitoring(state: InvestigationState) -> InvestigationState:
     llm = ChatGroq(
         model=settings.llm_model,
@@ -88,8 +91,9 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
         temperature=0,
         timeout=45,
         # Reasoning tokens count against this budget on gpt-oss models, so keep
-        # generous headroom: a truncated answer loses the confidence line.
-        max_tokens=2500,
+        # generous headroom: a truncated answer loses the confidence line. Long
+        # pytest logs pushed 2500 over the limit (5 of 120 reports on real bugs).
+        max_tokens=MAX_TOKENS,
         model_kwargs={"include_reasoning": settings.llm_include_reasoning},
     )
 
@@ -98,7 +102,7 @@ def run_monitoring(state: InvestigationState) -> InvestigationState:
     if evidence:
         messages = build_monitoring_messages(state)
         started = time.perf_counter()
-        result = (local_student(max_tokens=2500) or llm).invoke(messages)
+        result = (local_student(max_tokens=MAX_TOKENS) or llm).invoke(messages)
 
         raw = result.content
         if not isinstance(raw, str):
